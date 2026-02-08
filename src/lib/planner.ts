@@ -5,6 +5,20 @@ import { getNewsForBot } from "./news";
 import type { BotWithConfig, FeedItem, PlannedAction } from "./types";
 
 const NEWS_POST_CHANCE = 0.3; // 30% chance a post includes a news link
+const MAX_CONTENT_LEN = 540;
+
+/** Trim content to fit limit, cutting at last sentence boundary instead of mid-word */
+function trimContent(s: string, limit = MAX_CONTENT_LEN): string {
+  if (s.length <= limit) return s;
+  const cut = s.slice(0, limit);
+  // Try to end at a sentence boundary
+  const lastSentence = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "), cut.lastIndexOf(".\n"), cut.lastIndexOf(".\""), cut.lastIndexOf("!\""), cut.lastIndexOf("?\""));
+  if (lastSentence > 80) return cut.slice(0, lastSentence + 1).trim();
+  // Fall back to last word boundary
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > 80) return cut.slice(0, lastSpace).trim();
+  return cut.trim();
+}
 
 // Item data from SPITr spec
 const WEAPONS = [
@@ -112,14 +126,42 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     getFeedWithFallback(bot),
   ]);
 
+  // Destroyed guard — skip all actions if bot is dead
+  if (status.destroyed) {
+    return {
+      action: "post",
+      params: {},
+      reasoning: "Bot is destroyed (0 HP) - skipping action",
+      _skip: true,
+    } as PlannedAction & { _skip?: boolean };
+  }
+
+  // Daily chest auto-claim (free loot, always grab it)
+  if (status.daily_chest_available) {
+    return {
+      action: "claim_chest",
+      params: {},
+      reasoning: "Daily chest available - claiming free loot",
+    };
+  }
+
   // Priority: auto-heal if HP is critical
   const healAction = checkAutoHeal(bot, status);
   if (healAction) return healAction;
 
-  // Extract potential targets from the feed (other users the bot can interact with)
+  // Defense logic: defensive bots buy firewall if they don't have one
+  if (bot.config?.combat_strategy === "defensive" && !status.has_firewall && status.gold >= 15) {
+    return {
+      action: "buy_item",
+      params: { item_type: "firewall" },
+      reasoning: "Defensive bot without firewall - buying one (blocks 1 attack)",
+    };
+  }
+
+  // Extract potential targets from the feed (with HP/level awareness)
   const targets = feed
-    .filter((f) => f.user_id !== bot.user_id)
-    .map((f) => ({ id: f.user_id, handle: f.handle, hp: 0 }))
+    .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
+    .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0, max_hp: f.max_hp || 5000, level: f.level || 1 }))
     .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
 
   // Build prompt and ask Ollama for an action decision
@@ -178,14 +220,14 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     if (newsArticle) {
       const maxCommentLen = 540 - newsArticle.link.length - 1;
       if (content.length > maxCommentLen) {
-        content = content.slice(0, Math.max(maxCommentLen - 3, 10)) + "...";
+        content = trimContent(content, maxCommentLen);
       }
       content = `${content} ${newsArticle.link}`;
     }
 
     // Hard cap at 480 chars (560 is spitr limit, 80 char buffer)
     if (content.length > 540) {
-      content = content.slice(0, 537) + "...";
+      content = trimContent(content);
     }
 
     decision.params.content = content;
@@ -193,7 +235,7 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
 
   // Hard cap ALL content at 480 chars (80 char buffer under 560 spitr limit)
   if (decision.params.content && String(decision.params.content).length > 540) {
-    decision.params.content = String(decision.params.content).slice(0, 537) + "...";
+    decision.params.content = trimContent(String(decision.params.content));
   }
 
   // Guard buy_item — check bot can actually afford it
@@ -265,6 +307,25 @@ export async function planSpecificAction(
   const status = await spitrApi.getStatus(bot.user_id);
   const feed = await getFeedWithFallback(bot);
 
+  // Destroyed guard — skip all actions if bot is dead
+  if (status.destroyed) {
+    return {
+      action: "post",
+      params: {},
+      reasoning: "Bot is destroyed (0 HP) - skipping action",
+      _skip: true,
+    } as PlannedAction & { _skip?: boolean };
+  }
+
+  // Daily chest auto-claim (free loot, always grab it)
+  if (status.daily_chest_available) {
+    return {
+      action: "claim_chest",
+      params: {},
+      reasoning: "Daily chest available - claiming free loot",
+    };
+  }
+
   // Priority: auto-heal if HP is critical (regardless of requested action)
   const healAction = checkAutoHeal(bot, status);
   if (healAction) return healAction;
@@ -285,14 +346,14 @@ export async function planSpecificAction(
     if (newsArticle) {
       const maxCommentLen = 540 - newsArticle.link.length - 1;
       if (content.length > maxCommentLen) {
-        content = content.slice(0, Math.max(maxCommentLen - 3, 10)) + "...";
+        content = trimContent(content, maxCommentLen);
       }
       content = `${content} ${newsArticle.link}`;
       console.log(`[Planner] ${bot.name} posting news: ${newsArticle.title}`);
     }
 
     if (content.length > 540) {
-      content = content.slice(0, 537) + "...";
+      content = trimContent(content);
     }
 
     return {
@@ -309,7 +370,7 @@ export async function planSpecificAction(
     });
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
-    if (content.length > 540) content = content.slice(0, 537) + "...";
+    if (content.length > 540) content = trimContent(content);
     return {
       action: "reply",
       params: {
@@ -391,25 +452,32 @@ export async function planSpecificAction(
       };
     }
 
-    // Extract real targets from the feed (other users)
+    // Smart targeting: filter out destroyed users, sort by strategy
     const targets = feed
-      .filter((f) => f.user_id !== bot.user_id)
-      .map((f) => ({ id: f.user_id, handle: f.handle }))
+      .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
+      .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0, level: f.level || 1 }))
       .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
 
     if (targets.length > 0) {
-      const target = targets[Math.floor(Math.random() * targets.length)];
+      let target;
+      const strategy = bot.config?.combat_strategy || "balanced";
+      if (strategy === "aggressive") {
+        // Target weakest first
+        target = targets.sort((a, b) => a.hp - b.hp)[0];
+      } else {
+        target = targets[Math.floor(Math.random() * targets.length)];
+      }
       return {
         action: "attack",
         params: { target_id: target.id },
-        reasoning: `Attacking @${target.handle}`,
+        reasoning: `Attacking @${target.handle} (HP: ${target.hp}, Lv${target.level})`,
       };
     }
     // No targets available, fall back to a post
     const contentPrompt = buildContentPrompt(bot, "post");
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
-    if (content.length > 540) content = content.slice(0, 537) + "...";
+    if (content.length > 540) content = trimContent(content);
     return {
       action: "post",
       params: { content },
@@ -584,10 +652,70 @@ export async function planSpecificAction(
     };
   }
 
+  if (actionType === "claim_chest") {
+    if (status.daily_chest_available) {
+      return {
+        action: "claim_chest",
+        params: {},
+        reasoning: "Claiming daily chest",
+      };
+    }
+    // Already claimed today, do something else
+    return {
+      action: "post",
+      params: {},
+      reasoning: "Daily chest already claimed today",
+    };
+  }
+
+  if (actionType === "dm_send") {
+    // Get conversations to find someone to DM
+    const convos = await spitrApi.getConversations(bot.user_id);
+    let targetUserId: string | null = null;
+    let targetHandle = "someone";
+
+    if (convos.length > 0) {
+      // Reply to most recent conversation
+      const convo = convos[0];
+      targetUserId = convo.other_user_id;
+      targetHandle = convo.other_handle;
+    } else {
+      // No DM conversations yet — pick someone from feed
+      const feedTargets = feed.filter((f) => f.user_id !== bot.user_id && !f.destroyed);
+      if (feedTargets.length > 0) {
+        const t = feedTargets[Math.floor(Math.random() * feedTargets.length)];
+        targetUserId = t.user_id;
+        targetHandle = t.handle;
+      }
+    }
+
+    if (!targetUserId) {
+      return {
+        action: "post",
+        params: {},
+        reasoning: "No DM targets available",
+      };
+    }
+
+    // Generate DM content via Ollama
+    const contentPrompt = buildContentPrompt(bot, "dm_send", {
+      replyTo: `Direct message to @${targetHandle}`,
+    });
+    let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
+    content = content.trim().replace(/^["']|["']$/g, "");
+    if (content.length > 2000) content = trimContent(content, 2000);
+
+    return {
+      action: "dm_send",
+      params: { target_user_id: targetUserId, content },
+      reasoning: `DMing @${targetHandle}`,
+    };
+  }
+
   // Final fallback: use Ollama to decide (should rarely reach here)
   const targets = feed
-    .filter((f) => f.user_id !== bot.user_id)
-    .map((f) => ({ id: f.user_id, handle: f.handle, hp: 0 }))
+    .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
+    .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0, max_hp: f.max_hp || 5000, level: f.level || 1 }))
     .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
   const prompt = buildActionDecisionPrompt(bot, status, feed, targets);
   return ollama.generateJSON<PlannedAction>(prompt);

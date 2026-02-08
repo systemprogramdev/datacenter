@@ -76,7 +76,9 @@ export type ActionType =
   | "buy_item"
   | "open_chest"
   | "follow"
-  | "transfer";
+  | "transfer"
+  | "dm_send"
+  | "claim_chest";
 
 export type TargetMode = "random" | "specific" | "allies" | "enemies";
 export type CombatStrategy = "aggressive" | "defensive" | "passive" | "balanced";
@@ -96,7 +98,23 @@ export interface BotStatus {
   gold: number;
   bank_balance: number;
   level: number;
+  xp: number;
+  xp_next_level: number;
+  destroyed: boolean;
+  daily_chest_available: boolean;
+  weekly_paycheck_available: boolean;
+  has_firewall: boolean;
+  kevlar_charges: number;
+  stocks_owned: number;
+  active_cds: ActiveCD[];
   inventory: InventoryItem[];
+}
+
+export interface ActiveCD {
+  id: string;
+  amount: number;
+  term: number;
+  matures_at: string;
 }
 
 export interface InventoryItem {
@@ -114,6 +132,56 @@ export interface FeedItem {
   created_at: string;
   likes: number;
   respits: number;
+  hp: number;
+  max_hp: number;
+  level: number;
+  destroyed: boolean;
+}
+
+// --- DM Types ---
+
+export interface DMConversation {
+  conversation_id: string;
+  other_user_id: string;
+  other_handle: string;
+  other_name: string;
+  last_message: string | null;
+  last_message_at: string | null;
+  unread: boolean;
+}
+
+export interface DMMessage {
+  id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+}
+
+// --- Notification Types ---
+
+export interface BotNotification {
+  id: string;
+  type: string;
+  actor_id: string | null;
+  actor_handle: string | null;
+  actor_name: string | null;
+  spit_id: string | null;
+  reference_id: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+// --- User Lookup Types ---
+
+export interface UserLookup {
+  id: string;
+  handle: string;
+  name: string;
+  hp: number;
+  max_hp: number;
+  level: number;
+  destroyed: boolean;
+  is_bot: boolean;
 }
 
 // --- Planner Types ---

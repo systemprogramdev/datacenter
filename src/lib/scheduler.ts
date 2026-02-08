@@ -37,10 +37,12 @@ const ACTION_WEIGHTS: Record<string, number> = {
   attack: 8,
   buy_item: 4,
   bank_deposit: 3,
+  dm_send: 3,
   bank_convert: 2,
   bank_stock: 1,
   bank_lottery: 1,
   open_chest: 1,
+  claim_chest: 1,
 };
 
 function pickWeightedAction(enabledActions: string[]): string | null {
@@ -252,6 +254,12 @@ class Scheduler {
         // Plan and schedule each action
         for (let i = 0; i < toSchedule; i++) {
           const action = await pickAndPlanAction(bot);
+
+          // Skip if bot is destroyed (planner returns _skip flag)
+          if ((action as unknown as Record<string, unknown>)._skip) {
+            console.log(`[Scheduler] ${bot.name}: destroyed - skipping action`);
+            break;
+          }
 
           const scheduledFor = this.calculateScheduleTime(
             actionsUsed + pending + i,

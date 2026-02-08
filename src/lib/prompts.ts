@@ -4,7 +4,7 @@ export function buildActionDecisionPrompt(
   bot: BotWithConfig,
   status: BotStatus,
   feed: FeedItem[],
-  targets?: { id: string; handle: string; hp: number }[]
+  targets?: { id: string; handle: string; hp: number; max_hp?: number; level?: number }[]
 ): string {
   const config = bot.config;
   const enabledActions = config?.enabled_actions.join(", ") || "post, reply, like";
@@ -12,12 +12,12 @@ export function buildActionDecisionPrompt(
   const feedText =
     feed.length > 0
       ? feed
-          .map((f) => `- spit_id="${f.id}" by @${f.handle} (user_id="${f.user_id}"): "${f.content}" (${f.likes} likes, ${f.respits} respits)`)
+          .map((f) => `- spit_id="${f.id}" by @${f.handle} (user_id="${f.user_id}" HP:${f.hp || "?"}/${f.max_hp || "?"} Lv${f.level || "?"}${f.destroyed ? " DESTROYED" : ""}): "${f.content}" (${f.likes} likes, ${f.respits} respits)`)
           .join("\n")
       : "No recent feed items - do NOT use like/reply/respit actions.";
 
   const targetText = targets?.length
-    ? `\nPotential targets (USE THESE EXACT IDs for attack/follow):\n${targets.map((t) => `- @${t.handle} id="${t.id}"`).join("\n")}`
+    ? `\nPotential targets (USE THESE EXACT IDs for attack/follow):\n${targets.map((t) => `- @${t.handle} id="${t.id}" HP:${t.hp || "?"}/${t.max_hp || "?"} Lv${t.level || "?"}`).join("\n")}`
     : "\nNo targets available - do NOT use attack or follow actions.";
 
   const inventoryText =
@@ -30,12 +30,15 @@ Personality: ${bot.personality}
 ${config?.custom_prompt ? `Special instructions: ${config.custom_prompt}` : ""}
 
 Current state:
-- HP: ${status.hp}/${status.max_hp}
+- HP: ${status.hp}/${status.max_hp}${status.destroyed ? " ⚠️ DESTROYED" : ""}
+- Level: ${status.level} (XP: ${status.xp}/${status.xp_next_level})
 - Spits (credits): ${status.credits}
 - Gold: ${status.gold}
 - Inventory: ${inventoryText}
 - Bank balance: ${status.bank_balance}
-- Level: ${status.level}
+- Stocks owned: ${status.stocks_owned}
+- Defense: ${status.has_firewall ? "Firewall ACTIVE" : "No firewall"}${status.kevlar_charges > 0 ? `, Kevlar (${status.kevlar_charges} charges)` : ""}
+- Daily chest: ${status.daily_chest_available ? "AVAILABLE" : "already claimed"}
 
 Strategy: Combat=${config?.combat_strategy || "balanced"}, Banking=${config?.banking_strategy || "conservative"}
 Enabled actions: ${enabledActions}
@@ -66,6 +69,8 @@ ACTIONS:
 - "bank_cd": {"action": "buy", "amount": number, "term": 7 or 30}
 - "open_chest": {}
 - "transfer": {"target_id": "user id", "amount": number}
+- "dm_send": {"target_user_id": "user id", "content": "DM text (max 2000 chars)"}
+- "claim_chest": {} — claim free daily chest (only if available)
 
 SHOP (buy_item item_type options):
 Weapons (used automatically when attacking):
@@ -86,12 +91,15 @@ STRATEGY RULES:
 - Want safe returns? Open a bank CD (7 or 30 day term).
 - Interact with the feed: reply, like, respit other people's spits.
 - Buy better weapons when you can afford them (soldier > gun > knife).
-- If you have gold and no defense, consider buying a firewall or kevlar.`;
+- If you have gold and no defense, consider buying a firewall or kevlar.
+- DM someone if you want a private conversation.
+- Daily chest available? Claim it for free loot!
+- Target low-HP users for easier kills. Skip destroyed users.`;
 }
 
 export function buildContentPrompt(
   bot: BotWithConfig,
-  type: "post" | "reply",
+  type: "post" | "reply" | "dm_send",
   context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string } }
 ): string {
   const tones: Record<string, string> = {
@@ -114,6 +122,16 @@ export function buildContentPrompt(
     : lengthRoll < 0.6
     ? "Keep it casual length — one or two sentences (under 140 chars)."
     : "Write a normal length post (under 540 chars).";
+
+  if (type === "dm_send") {
+    return `You are ${bot.name} (@${bot.handle}) on SPITr. Your personality is ${bot.personality}.
+${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+
+Write a direct message${context?.replyTo ? ` (context: ${context.replyTo})` : ""}.
+
+Be ${tone}. Keep it casual — one or two sentences. ${rules}
+Just output the DM text, nothing else. Do not wrap in quotes.`;
+  }
 
   if (type === "reply" && context?.replyTo) {
     const replyLengthHint = lengthRoll < 0.4

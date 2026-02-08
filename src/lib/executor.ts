@@ -63,10 +63,28 @@ export async function executeJob(job: BotJob, botUserId: string): Promise<void> 
   }
 }
 
+function clampDMContent(text: unknown): string {
+  const s = String(text || "");
+  if (s.length <= 2000) return s;
+  const cut = s.slice(0, 2000);
+  const lastSentence = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "));
+  if (lastSentence > 200) return cut.slice(0, lastSentence + 1).trim();
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > 200) return cut.slice(0, lastSpace).trim();
+  return cut.trim();
+}
+
 function clampContent(text: unknown): string {
   let s = String(text || "");
-  if (s.length > 540) s = s.slice(0, 537) + "...";
-  return s;
+  if (s.length <= 540) return s;
+  // Cut to 540, then trim back to last sentence boundary
+  const cut = s.slice(0, 540);
+  const lastSentence = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("! "), cut.lastIndexOf("? "), cut.lastIndexOf(".\n"), cut.lastIndexOf(".\""));
+  if (lastSentence > 100) return cut.slice(0, lastSentence + 1).trim();
+  // No sentence boundary — trim to last word boundary
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > 100) return cut.slice(0, lastSpace).trim();
+  return cut.trim();
 }
 
 async function executeAction(
@@ -157,6 +175,16 @@ async function executeAction(
           cdId: params.cd_id as string,
         }
       );
+
+    case "dm_send":
+      return spitrApi.sendDM(
+        botUserId,
+        params.target_user_id as string,
+        clampDMContent(params.content)
+      );
+
+    case "claim_chest":
+      return spitrApi.claimChest(botUserId);
 
     default:
       throw new Error(`Unknown action type: ${actionType}`);
