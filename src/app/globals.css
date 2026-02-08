@@ -1,26 +1,286 @@
-@import "tailwindcss";
+@import "sysui-css";
+@import "sysui-css/utilities.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* ── Base ─────────────────────────────────────── */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100vh;
+}
+
+/* ── Container ────────────────────────────────── */
+.dc-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+/* ── Page sections ────────────────────────────── */
+.dc-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.dc-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dc-page-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--sys-primary);
+  letter-spacing: 0.04em;
+}
+
+.dc-page-subtitle {
+  font-size: 0.7rem;
+  color: var(--sys-text-muted);
+  margin-top: 0.15rem;
+}
+
+/* ── Header / Nav ─────────────────────────────── */
+.dc-header {
+  border-bottom: 1px solid var(--sys-border);
+  background: var(--sys-surface);
+  padding: 0.5rem 1.25rem;
+}
+
+.dc-nav {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.dc-brand {
+  color: var(--sys-primary);
+  letter-spacing: 0.1em;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.dc-version {
+  color: var(--sys-text-muted);
+  font-size: 0.65rem;
+}
+
+/* ── Footer ───────────────────────────────────── */
+.dc-footer {
+  border-top: 1px solid var(--sys-border);
+  padding: 0.4rem 1.25rem;
+  font-size: 0.65rem;
+  color: var(--sys-text-muted);
+}
+
+/* ── Status dot pulse ─────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.pulse-dot-lg {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+/* ── Stat cards ───────────────────────────────── */
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 0.2rem;
+}
+
+.stat-label {
+  font-size: 0.65rem;
+  color: var(--sys-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ── Panel sections (consistent padding) ──────── */
+.dc-panel-body {
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dc-panel-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dc-panel-header-bar {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--sys-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* ── Scheduler / HUD stats grid ───────────────── */
+.dc-hud-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem 1rem;
+  font-size: 0.75rem;
+}
+
+.dc-hud-stat {
+  color: var(--sys-text-muted);
+}
+
+/* ── Job table ────────────────────────────────── */
+.job-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.job-table th,
+.job-table td {
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  border-bottom: 1px solid var(--sys-border);
+  font-size: 0.7rem;
+}
+.job-table th {
+  color: var(--sys-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.6rem;
+  font-weight: 600;
+}
+.job-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ── Log entries ──────────────────────────────── */
+.log-entry {
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.7rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.log-entry:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* ── Form grid ────────────────────────────────── */
+.dc-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+@media (max-width: 640px) {
+  .dc-form-grid { grid-template-columns: 1fr; }
+}
+
+.dc-form-footer {
+  margin-top: 0.6rem;
+}
+
+/* ── Config display (settings page) ───────────── */
+.dc-config-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  padding: 0.2rem 0;
+}
+.dc-config-label {
+  width: 11rem;
+  flex-shrink: 0;
+  color: var(--sys-text-muted);
+}
+.dc-config-key {
+  width: 13rem;
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  color: var(--sys-text-muted);
+}
+
+/* ── Bot info grid ────────────────────────────── */
+.dc-info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.3rem 1rem;
+  font-size: 0.75rem;
+}
+
+/* ── Action button grid ───────────────────────── */
+.dc-action-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+/* ── Event stream lines ───────────────────────── */
+.dc-event-line {
+  padding: 0.1rem 0;
+  font-size: 0.65rem;
+}
+
+/* ── Badge sizing ─────────────────────────────── */
+.dc-badge-sm {
+  font-size: 0.6rem;
+}
+
+/* ── Filter bar ───────────────────────────────── */
+.dc-filter-bar {
+  display: flex;
+  gap: 0.2rem;
+}
+
+/* ── Grid layouts ─────────────────────────────── */
+.grid-stats {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.6rem;
+}
+@media (max-width: 1024px) {
+  .grid-stats { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 640px) {
+  .grid-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
+.grid-bots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6rem;
+}
+@media (max-width: 1280px) {
+  .grid-bots { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 768px) {
+  .grid-bots { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .grid-bots { grid-template-columns: 1fr; }
+}
+
+.grid-2col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+@media (max-width: 1024px) {
+  .grid-2col { grid-template-columns: 1fr; }
 }
