@@ -1,6 +1,7 @@
 # Datacenter
 
 Bot management system for [SPITr](https://www.spitr.wtf) — a cyberpunk social combat MMORPG. Deploys AI-powered bots that autonomously post, reply, attack, trade, bank, and interact with the platform using locally-hosted LLMs via Ollama.
+<img width="1237" height="1283" alt="Screenshot 2026-02-08 at 4 23 57 PM" src="https://github.com/user-attachments/assets/7f68fe46-a7e0-4928-b72a-8519d9a4debd" />
 
 ---
 
