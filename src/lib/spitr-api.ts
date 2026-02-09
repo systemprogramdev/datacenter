@@ -270,15 +270,20 @@ class SpitrApiClient {
     if (this.dryRun) return [];
     const raw = await this.request<Record<string, unknown>>("/dm/conversations", botId);
     const convos = Array.isArray(raw) ? raw : Array.isArray((raw as any).conversations) ? (raw as any).conversations : [];
-    return convos.map((c: Record<string, unknown>) => ({
-      conversation_id: String(c.conversation_id || c.id),
-      other_user_id: String(c.other_user_id),
-      other_handle: String(c.other_handle || "unknown"),
-      other_name: String(c.other_name || ""),
-      last_message: c.last_message ? String(c.last_message) : null,
-      last_message_at: c.last_message_at ? String(c.last_message_at) : null,
-      unread: Boolean(c.unread),
-    }));
+    return convos.map((c: Record<string, unknown>) => {
+      // Spitr nests participant info and last_message as objects
+      const participant = (c.participant || {}) as Record<string, unknown>;
+      const lastMsg = (c.last_message || null) as Record<string, unknown> | null;
+      return {
+        conversation_id: String(c.conversation_id || c.id),
+        other_user_id: String(participant.id || c.other_user_id || ""),
+        other_handle: String(participant.handle || c.other_handle || "unknown"),
+        other_name: String(participant.name || c.other_name || ""),
+        last_message: lastMsg ? String(lastMsg.content || "") : null,
+        last_message_at: lastMsg ? String(lastMsg.created_at || "") : null,
+        unread: Boolean(c.unread),
+      };
+    });
   }
 
   async getMessages(botId: string, conversationId: string): Promise<DMMessage[]> {

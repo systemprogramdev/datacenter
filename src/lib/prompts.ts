@@ -99,8 +99,8 @@ STRATEGY RULES:
 
 export function buildContentPrompt(
   bot: BotWithConfig,
-  type: "post" | "reply" | "dm_send",
-  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string } }
+  type: "post" | "reply" | "dm_send" | "dm_reply",
+  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string }; dmHistory?: string }
 ): string {
   const tones: Record<string, string> = {
     aggressive: "confrontational, edgy, and provocative",
@@ -131,6 +131,18 @@ Write a direct message${context?.replyTo ? ` (context: ${context.replyTo})` : ""
 
 Be ${tone}. Keep it casual — one or two sentences. ${rules}
 Just output the DM text, nothing else. Do not wrap in quotes.`;
+  }
+
+  if (type === "dm_reply") {
+    return `You are ${bot.name} (@${bot.handle}) on SPITr. Your personality is ${bot.personality}.
+${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+
+You have an unread DM conversation. Here is the recent chat history:
+${context?.dmHistory || "(no history)"}
+
+Write your reply to continue this conversation. Stay in character.
+Be ${tone}. Keep it natural — respond to what they said. ${rules}
+Just output your reply text, nothing else. Do not wrap in quotes.`;
   }
 
   if (type === "reply" && context?.replyTo) {

@@ -1,6 +1,7 @@
 import { ollama } from "./ollama";
 import { spitrApi } from "./spitr-api";
 import { buildActionDecisionPrompt, buildContentPrompt } from "./prompts";
+import type { DMConversation } from "./types";
 import { getNewsForBot } from "./news";
 import type { BotWithConfig, FeedItem, PlannedAction } from "./types";
 
@@ -119,6 +120,49 @@ function checkAutoHeal(bot: BotWithConfig, status: { hp: number; max_hp: number;
   return null; // No potions and no gold, continue with normal planning
 }
 
+/** Check for unread DMs and generate a reply if found */
+async function checkUnreadDMs(bot: BotWithConfig): Promise<PlannedAction | null> {
+  try {
+    const convos = await spitrApi.getConversations(bot.user_id);
+    const unread = convos.find((c: DMConversation) => c.unread);
+    if (!unread) return null;
+
+    // Build context from the conversation data
+    // Use last_message from conversations response (avoids messages endpoint 403 bug)
+    let dmHistory = `@${unread.other_handle}: ${unread.last_message || "(message)"}`;
+
+    // Try to fetch full history for richer context (may fail due to spitr bug)
+    try {
+      const messages = await spitrApi.getMessages(bot.user_id, unread.conversation_id);
+      if (messages.length > 0) {
+        const recent = messages.slice(-6);
+        dmHistory = recent
+          .map((m) => `@${m.sender_id === bot.user_id ? bot.handle : unread.other_handle}: ${m.content}`)
+          .join("\n");
+      }
+    } catch {
+      // Messages endpoint may 403 — fall back to last_message context
+    }
+
+    // Generate reply with conversation context
+    const contentPrompt = buildContentPrompt(bot, "dm_reply", { dmHistory });
+    let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
+    content = content.trim().replace(/^["']|["']$/g, "");
+    if (content.length > 2000) content = trimContent(content, 2000);
+
+    console.log(`[Planner] ${bot.name} replying to DM from @${unread.other_handle}`);
+
+    return {
+      action: "dm_send",
+      params: { target_user_id: unread.other_user_id, content },
+      reasoning: `Replying to unread DM from @${unread.other_handle}`,
+    };
+  } catch (err) {
+    console.error(`[Planner] ${bot.name} DM check failed:`, err);
+    return null;
+  }
+}
+
 export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   // Gather context from spitr API
   const [status, feed] = await Promise.all([
@@ -148,6 +192,10 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   // Priority: auto-heal if HP is critical
   const healAction = checkAutoHeal(bot, status);
   if (healAction) return healAction;
+
+  // Check for unread DMs — reply takes priority over regular actions
+  const dmReply = await checkUnreadDMs(bot);
+  if (dmReply) return dmReply;
 
   // Defense logic: defensive bots buy firewall if they don't have one
   if (bot.config?.combat_strategy === "defensive" && !status.has_firewall && status.gold >= 15) {
@@ -329,6 +377,10 @@ export async function planSpecificAction(
   // Priority: auto-heal if HP is critical (regardless of requested action)
   const healAction = checkAutoHeal(bot, status);
   if (healAction) return healAction;
+
+  // Check for unread DMs — reply takes priority over regular actions
+  const dmReply = await checkUnreadDMs(bot);
+  if (dmReply) return dmReply;
 
   // For content actions, generate via Ollama
   if (actionType === "post") {
