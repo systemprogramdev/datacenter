@@ -43,6 +43,7 @@ const ACTION_WEIGHTS: Record<string, number> = {
   bank_lottery: 1,
   open_chest: 1,
   claim_chest: 1,
+  consolidate: 0, // handled by priority chain, not random
 };
 
 function pickWeightedAction(enabledActions: string[]): string | null {

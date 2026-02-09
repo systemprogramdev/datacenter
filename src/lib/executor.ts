@@ -186,6 +186,12 @@ async function executeAction(
     case "claim_chest":
       return spitrApi.claimChest(botUserId);
 
+    case "consolidate":
+      return spitrApi.consolidate(botUserId, {
+        spit_reserve: params.spit_reserve as number | undefined,
+        gold_reserve: params.gold_reserve as number | undefined,
+      });
+
     default:
       throw new Error(`Unknown action type: ${actionType}`);
   }

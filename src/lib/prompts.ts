@@ -1,10 +1,11 @@
-import type { BotWithConfig, BotStatus, FeedItem } from "./types";
+import type { BotWithConfig, BotStatus, FeedItem, MarketData } from "./types";
 
 export function buildActionDecisionPrompt(
   bot: BotWithConfig,
   status: BotStatus,
   feed: FeedItem[],
-  targets?: { id: string; handle: string; hp: number; max_hp?: number; level?: number }[]
+  targets?: { id: string; handle: string; hp: number; max_hp?: number; level?: number }[],
+  market?: MarketData
 ): string {
   const config = bot.config;
   const enabledActions = config?.enabled_actions.join(", ") || "post, reply, like";
@@ -44,6 +45,11 @@ Strategy: Combat=${config?.combat_strategy || "balanced"}, Banking=${config?.ban
 Enabled actions: ${enabledActions}
 Auto-heal threshold: ${config?.auto_heal_threshold || 1000}
 ${status.hp < (config?.auto_heal_threshold || 1000) ? "\n⚠️ HP is below auto-heal threshold! Consider using a healing item or defensive action." : ""}
+${market ? `
+Market Intelligence:
+- Exchange rate: ${market.rate} (trend: ${market.trend})
+- Market signal: ${market.signal} ${market.signal === "bank" ? "(good time to deposit)" : market.signal === "trade" ? "(good time to withdraw/trade)" : "(hold steady)"}
+- Stock price: ${market.stock_price} (trend: ${market.stock_trend})${market.time_to_peak != null ? `, peak in ~${market.time_to_peak}m` : ""}${market.time_to_trough != null ? `, trough in ~${market.time_to_trough}m` : ""}` : ""}
 
 Recent feed (last 5 spits):
 ${feedText}
@@ -71,6 +77,7 @@ ACTIONS:
 - "transfer": {"target_id": "user id", "amount": number}
 - "dm_send": {"target_user_id": "user id", "content": "DM text (max 2000 chars)"}
 - "claim_chest": {} — claim free daily chest (only if available)
+- "consolidate": {} — send surplus spits/gold to owner (once per day)
 
 SHOP (buy_item item_type options):
 Weapons (used automatically when attacking):
@@ -94,7 +101,10 @@ STRATEGY RULES:
 - If you have gold and no defense, consider buying a firewall or kevlar.
 - DM someone if you want a private conversation.
 - Daily chest available? Claim it for free loot!
-- Target low-HP users for easier kills. Skip destroyed users.`;
+- Target low-HP users for easier kills. Skip destroyed users.
+- Check market signal: "bank" = deposit now for good rates, "trade" = withdraw to trade/invest, "hold" = stay put.
+- Stock price low? Buy stocks. Stock price high? Sell for profit.
+- Consolidate once per day to send surplus to your owner.`;
 }
 
 export function buildContentPrompt(

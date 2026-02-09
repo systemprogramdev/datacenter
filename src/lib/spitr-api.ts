@@ -1,13 +1,24 @@
-import type { BotStatus, FeedItem, DMConversation, DMMessage, BotNotification, UserLookup } from "./types";
+import type { BotStatus, FeedItem, DMConversation, DMMessage, BotNotification, UserLookup, MarketData, ConsolidateResult } from "./types";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const SPITR_API_URL = process.env.SPITR_API_URL || "https://spitr.wtf";
 const DATACENTER_API_KEY = process.env.DATACENTER_API_KEY || "";
 
+const MARKET_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+const DEFAULT_MARKET: MarketData = {
+  rate: 1.0,
+  trend: "stable",
+  signal: "hold",
+  stock_price: 100,
+  stock_trend: "stable",
+};
+
 class SpitrApiClient {
   private baseUrl: string;
   private apiKey: string;
   private dryRun: boolean;
+  private marketCache: { data: MarketData; fetchedAt: number } | null = null;
 
   constructor() {
     this.baseUrl = SPITR_API_URL;
@@ -38,6 +49,30 @@ class SpitrApiClient {
         "X-Bot-Id": botId,
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr API error ${res.status}: ${text}`);
+    }
+
+    return res.json();
+  }
+
+  private async requestPublic<T = unknown>(path: string): Promise<T> {
+    if (this.dryRun) {
+      console.log(`[DRY RUN] GET ${path} (public)`);
+      return {} as T;
+    }
+
+    const url = `${this.baseUrl}/api/bot${path}`;
+    console.log(`[SpitrAPI] GET ${url} (public)`);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datacenter-Key": this.apiKey,
+      },
     });
 
     if (!res.ok) {
@@ -96,6 +131,21 @@ class SpitrApiClient {
       stocks_owned: Number(raw.stocks_owned) || 0,
       active_cds: Array.isArray(raw.active_cds) ? (raw.active_cds as BotStatus["active_cds"]) : [],
       inventory: Array.isArray(raw.inventory) ? raw.inventory as BotStatus["inventory"] : [],
+      market: raw.market ? {
+        rate: Number((raw.market as Record<string, unknown>).rate) || 1.0,
+        trend: ((raw.market as Record<string, unknown>).trend as MarketData["trend"]) || "stable",
+        signal: ((raw.market as Record<string, unknown>).signal as MarketData["signal"]) || "hold",
+        stock_price: Number((raw.market as Record<string, unknown>).stock_price) || 100,
+        stock_trend: ((raw.market as Record<string, unknown>).stock_trend as MarketData["stock_trend"]) || "stable",
+      } as MarketData : undefined,
+      deposits_over_24h: Array.isArray(raw.deposits_over_24h) ? (raw.deposits_over_24h as Record<string, unknown>[]).map(d => ({
+        id: String(d.id),
+        principal: Number(d.principal) || 0,
+        withdrawn: Number(d.withdrawn) || 0,
+        accrued_interest: Number(d.accrued_interest) || 0,
+        current_value: Number(d.current_value) || 0,
+      })) : undefined,
+      suggested_action: raw.suggested_action ? String(raw.suggested_action) : undefined,
     };
   }
 
@@ -262,6 +312,62 @@ class SpitrApiClient {
       method: "POST",
       body: { action: "redeem", cd_id: opts.cdId },
     });
+  }
+
+  // --- Market Intelligence ---
+
+  async getMarket(): Promise<MarketData> {
+    // Return cached data if fresh enough
+    if (this.marketCache && Date.now() - this.marketCache.fetchedAt < MARKET_CACHE_TTL) {
+      return this.marketCache.data;
+    }
+
+    if (this.dryRun) {
+      return DEFAULT_MARKET;
+    }
+
+    try {
+      const raw = await this.requestPublic<Record<string, unknown>>("/market");
+      const data: MarketData = {
+        rate: Number(raw.rate) || 1.0,
+        trend: (raw.trend as MarketData["trend"]) || "stable",
+        signal: (raw.signal as MarketData["signal"]) || "hold",
+        stock_price: Number(raw.stock_price) || 100,
+        stock_trend: (raw.stock_trend as MarketData["stock_trend"]) || "stable",
+        time_to_peak: raw.time_to_peak != null ? Number(raw.time_to_peak) : undefined,
+        time_to_trough: raw.time_to_trough != null ? Number(raw.time_to_trough) : undefined,
+      };
+      this.marketCache = { data, fetchedAt: Date.now() };
+      return data;
+    } catch (err) {
+      console.error("[SpitrAPI] Market fetch failed, using cached/default:", err);
+      return this.marketCache?.data || DEFAULT_MARKET;
+    }
+  }
+
+  // --- Consolidation ---
+
+  async consolidate(botId: string, opts: { spit_reserve?: number; gold_reserve?: number } = {}): Promise<ConsolidateResult> {
+    if (this.dryRun) {
+      return { spits_sent: 0, gold_sent: 0, limits: { spits_remaining: 0, gold_remaining: 0 }, bot_wealth: { credits: 0, gold: 0, bank_balance: 0 } };
+    }
+    const raw = await this.request<Record<string, unknown>>("/consolidate", botId, {
+      method: "POST",
+      body: opts,
+    });
+    return {
+      spits_sent: Number(raw.spits_sent) || 0,
+      gold_sent: Number(raw.gold_sent) || 0,
+      limits: {
+        spits_remaining: Number((raw.limits as Record<string, unknown>)?.spits_remaining) || 0,
+        gold_remaining: Number((raw.limits as Record<string, unknown>)?.gold_remaining) || 0,
+      },
+      bot_wealth: {
+        credits: Number((raw.bot_wealth as Record<string, unknown>)?.credits) || 0,
+        gold: Number((raw.bot_wealth as Record<string, unknown>)?.gold) || 0,
+        bank_balance: Number((raw.bot_wealth as Record<string, unknown>)?.bank_balance) || 0,
+      },
+    };
   }
 
   // --- DMs ---

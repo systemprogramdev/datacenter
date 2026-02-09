@@ -3,10 +3,158 @@ import { spitrApi } from "./spitr-api";
 import { buildActionDecisionPrompt, buildContentPrompt } from "./prompts";
 import type { DMConversation } from "./types";
 import { getNewsForBot } from "./news";
-import type { BotWithConfig, FeedItem, PlannedAction } from "./types";
+import type { BotWithConfig, BotStatus, FeedItem, PlannedAction, MarketData, BankingProfile } from "./types";
 
 const NEWS_POST_CHANCE = 0.3; // 30% chance a post includes a news link
 const MAX_CONTENT_LEN = 540;
+
+// --- Banking Profiles ---
+// Numeric thresholds per banking strategy — drives all financial decisions deterministically
+
+const BANKING_PROFILES: Record<string, BankingProfile> = {
+  aggressive: {
+    depositPercent: 0.6,
+    withdrawPercent: 0.4,
+    minWalletReserve: 50,
+    stockBuyThreshold: 80,   // buy when stock price < 80
+    stockSellThreshold: 130, // sell when stock price > 130
+    consolidateReserveSpits: 100,
+    consolidateReserveGold: 5,
+    financialActionChance: 0.4,
+  },
+  balanced: {
+    depositPercent: 0.4,
+    withdrawPercent: 0.3,
+    minWalletReserve: 200,
+    stockBuyThreshold: 70,
+    stockSellThreshold: 150,
+    consolidateReserveSpits: 300,
+    consolidateReserveGold: 15,
+    financialActionChance: 0.25,
+  },
+  conservative: {
+    depositPercent: 0.25,
+    withdrawPercent: 0.15,
+    minWalletReserve: 500,
+    stockBuyThreshold: 50,
+    stockSellThreshold: 180,
+    consolidateReserveSpits: 500,
+    consolidateReserveGold: 30,
+    financialActionChance: 0.15,
+  },
+};
+
+function getProfile(bot: BotWithConfig): BankingProfile {
+  return BANKING_PROFILES[bot.config?.banking_strategy || "conservative"] || BANKING_PROFILES.conservative;
+}
+
+// --- Consolidation Tracking (once per day per bot, in-memory) ---
+
+const consolidatedToday = new Map<string, string>(); // bot.id → date string
+
+function hasConsolidatedToday(botId: string): boolean {
+  const today = new Date().toISOString().split("T")[0];
+  return consolidatedToday.get(botId) === today;
+}
+
+function markConsolidated(botId: string): void {
+  consolidatedToday.set(botId, new Date().toISOString().split("T")[0]);
+}
+
+/** Check if bot should consolidate surplus to owner */
+function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction | null {
+  if (hasConsolidatedToday(bot.id)) return null;
+  if (!bot.owner_id || bot.owner_id === bot.user_id) return null;
+
+  const profile = getProfile(bot);
+  const surplusSpits = status.credits - profile.consolidateReserveSpits;
+  const surplusGold = status.gold - profile.consolidateReserveGold;
+
+  // Only consolidate if there's meaningful surplus
+  if (surplusSpits < 50 && surplusGold < 5) return null;
+
+  markConsolidated(bot.id);
+  return {
+    action: "consolidate",
+    params: {
+      spit_reserve: profile.consolidateReserveSpits,
+      gold_reserve: profile.consolidateReserveGold,
+    },
+    reasoning: `Daily consolidation: sending surplus (${Math.max(surplusSpits, 0)} spits, ${Math.max(surplusGold, 0)} gold) to owner. Reserve: ${profile.consolidateReserveSpits} spits, ${profile.consolidateReserveGold} gold`,
+  };
+}
+
+/** Market-aware financial action planner — deterministic, no Ollama */
+function planFinancialAction(bot: BotWithConfig, status: BotStatus, market: MarketData): PlannedAction | null {
+  const profile = getProfile(bot);
+
+  // Roll probability — skip financial action most ticks
+  if (Math.random() > profile.financialActionChance) return null;
+
+  // Priority order: stock sell > withdraw mature > deposit > stock buy > convert
+
+  // 1. Sell stocks when price is high
+  if (status.stocks_owned > 0 && market.stock_price > profile.stockSellThreshold) {
+    return {
+      action: "bank_stock",
+      params: { action: "sell", amount: Math.ceil(status.stocks_owned * 0.5) },
+      reasoning: `Market signal: stock price ${market.stock_price} > sell threshold ${profile.stockSellThreshold} (trend: ${market.stock_trend}) — selling ${Math.ceil(status.stocks_owned * 0.5)} shares`,
+    };
+  }
+
+  // 2. Withdraw when market says trade and mature deposits with interest exist
+  if (market.signal === "trade" && status.deposits_over_24h && status.deposits_over_24h.length > 0) {
+    const matureDeposit = status.deposits_over_24h.find(d => d.accrued_interest > 0);
+    if (matureDeposit) {
+      const withdrawAmount = Math.floor(matureDeposit.current_value * profile.withdrawPercent);
+      if (withdrawAmount > 0) {
+        return {
+          action: "bank_withdraw",
+          params: { amount: withdrawAmount },
+          reasoning: `Market signal: "trade" — withdrawing ${withdrawAmount} from mature deposit (interest: ${matureDeposit.accrued_interest}, rate: ${market.rate})`,
+        };
+      }
+    }
+  }
+
+  // 3. Deposit when market says bank and we have surplus credits
+  if (market.signal === "bank" && status.credits > profile.minWalletReserve) {
+    const depositAmount = Math.floor((status.credits - profile.minWalletReserve) * profile.depositPercent);
+    if (depositAmount > 0) {
+      return {
+        action: "bank_deposit",
+        params: { amount: depositAmount },
+        reasoning: `Market signal: "bank" — depositing ${depositAmount} (rate: ${market.rate}, trend: ${market.trend}). Keeping ${profile.minWalletReserve} reserve`,
+      };
+    }
+  }
+
+  // 4. Buy stocks when price is low
+  if (market.stock_price < profile.stockBuyThreshold && status.credits > profile.minWalletReserve + 100) {
+    const investAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.2);
+    if (investAmount > 0) {
+      return {
+        action: "bank_stock",
+        params: { action: "buy", amount: investAmount },
+        reasoning: `Market signal: stock price ${market.stock_price} < buy threshold ${profile.stockBuyThreshold} (trend: ${market.stock_trend}) — buying with ${investAmount} credits`,
+      };
+    }
+  }
+
+  // 5. Convert spits to gold when gold is critically low
+  if (status.gold < 3 && status.credits > profile.minWalletReserve + 50) {
+    const convertAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.1);
+    if (convertAmount > 0) {
+      return {
+        action: "bank_convert",
+        params: { direction: "spits_to_gold", amount: convertAmount },
+        reasoning: `Gold critically low (${status.gold}) — converting ${convertAmount} spits to gold`,
+      };
+    }
+  }
+
+  return null;
+}
 
 /** Trim content to fit limit, cutting at last sentence boundary instead of mid-word */
 function trimContent(s: string, limit = MAX_CONTENT_LEN): string {
@@ -164,10 +312,11 @@ async function checkUnreadDMs(bot: BotWithConfig): Promise<PlannedAction | null>
 }
 
 export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
-  // Gather context from spitr API
-  const [status, feed] = await Promise.all([
+  // Gather context from spitr API (market fetched in parallel)
+  const [status, feed, market] = await Promise.all([
     spitrApi.getStatus(bot.user_id),
     getFeedWithFallback(bot),
+    spitrApi.getMarket(),
   ]);
 
   // Destroyed guard — skip all actions if bot is dead
@@ -189,6 +338,10 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     };
   }
 
+  // Consolidation to owner (once per day, priority)
+  const consolidateAction = checkConsolidate(bot, status);
+  if (consolidateAction) return consolidateAction;
+
   // Priority: auto-heal if HP is critical
   const healAction = checkAutoHeal(bot, status);
   if (healAction) return healAction;
@@ -206,6 +359,10 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     };
   }
 
+  // Market-aware financial action (probabilistic per banking profile)
+  const financialAction = planFinancialAction(bot, status, market);
+  if (financialAction) return financialAction;
+
   // Extract potential targets from the feed (with HP/level awareness)
   const targets = feed
     .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
@@ -213,7 +370,7 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
 
   // Build prompt and ask Ollama for an action decision
-  const prompt = buildActionDecisionPrompt(bot, status, feed, targets);
+  const prompt = buildActionDecisionPrompt(bot, status, feed, targets, market);
 
   const decision = await ollama.generateJSON<PlannedAction>(prompt);
 
@@ -352,8 +509,11 @@ export async function planSpecificAction(
   bot: BotWithConfig,
   actionType: string
 ): Promise<PlannedAction> {
-  const status = await spitrApi.getStatus(bot.user_id);
-  const feed = await getFeedWithFallback(bot);
+  const [status, feed, market] = await Promise.all([
+    spitrApi.getStatus(bot.user_id),
+    getFeedWithFallback(bot),
+    spitrApi.getMarket(),
+  ]);
 
   // Destroyed guard — skip all actions if bot is dead
   if (status.destroyed) {
@@ -442,7 +602,18 @@ export async function planSpecificAction(
     };
   }
 
+  if (actionType === "consolidate") {
+    const consolidateAction = checkConsolidate(bot, status);
+    if (consolidateAction) return consolidateAction;
+    return {
+      action: "post",
+      params: {},
+      reasoning: "Already consolidated today or no surplus",
+    };
+  }
+
   if (actionType === "bank_deposit") {
+    const profile = getProfile(bot);
     if (status.credits < 1) {
       return {
         action: "post",
@@ -450,15 +621,28 @@ export async function planSpecificAction(
         reasoning: "No credits to deposit",
       };
     }
-    const amount = Math.max(Math.floor(status.credits * 0.3), 1);
+    // Market-aware: deposit more when signal says "bank", less when "trade"
+    let depositPct = profile.depositPercent;
+    if (market.signal === "bank") depositPct = Math.min(depositPct * 1.5, 0.8);
+    else if (market.signal === "trade") depositPct = depositPct * 0.5;
+    const available = Math.max(status.credits - profile.minWalletReserve, 0);
+    const amount = Math.max(Math.floor(available * depositPct), 1);
+    if (amount < 1) {
+      return {
+        action: "post",
+        params: { content: "broke as hell rn" },
+        reasoning: `Credits (${status.credits}) below wallet reserve (${profile.minWalletReserve})`,
+      };
+    }
     return {
       action: "bank_deposit",
       params: { amount },
-      reasoning: `Depositing ${amount} credits`,
+      reasoning: `Depositing ${amount} credits (market: ${market.signal}, rate: ${market.rate}, trend: ${market.trend})`,
     };
   }
 
   if (actionType === "bank_withdraw") {
+    const profile = getProfile(bot);
     if (status.bank_balance < 1) {
       return {
         action: "post",
@@ -466,11 +650,15 @@ export async function planSpecificAction(
         reasoning: "No bank balance to withdraw",
       };
     }
-    const amount = Math.max(Math.floor(status.bank_balance * 0.2), 1);
+    // Market-aware: withdraw more when signal says "trade", less when "bank"
+    let withdrawPct = profile.withdrawPercent;
+    if (market.signal === "trade") withdrawPct = Math.min(withdrawPct * 1.5, 0.6);
+    else if (market.signal === "bank") withdrawPct = withdrawPct * 0.5;
+    const amount = Math.max(Math.floor(status.bank_balance * withdrawPct), 1);
     return {
       action: "bank_withdraw",
       params: { amount },
-      reasoning: `Withdrawing ${amount} credits from bank`,
+      reasoning: `Withdrawing ${amount} credits (market: ${market.signal}, rate: ${market.rate}, trend: ${market.trend})`,
     };
   }
 
@@ -669,11 +857,30 @@ export async function planSpecificAction(
   }
 
   if (actionType === "bank_stock") {
+    const profile = getProfile(bot);
+    // Market-aware: sell if price high, buy if price low
+    if (status.stocks_owned > 0 && market.stock_price > profile.stockSellThreshold) {
+      const shares = Math.ceil(status.stocks_owned * 0.5);
+      return {
+        action: "bank_stock",
+        params: { action: "sell", amount: shares },
+        reasoning: `Selling ${shares} shares — price ${market.stock_price} > threshold ${profile.stockSellThreshold} (trend: ${market.stock_trend})`,
+      };
+    }
+    if (market.stock_price < profile.stockBuyThreshold && status.credits > profile.minWalletReserve) {
+      const investAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.2);
+      return {
+        action: "bank_stock",
+        params: { action: "buy", amount: Math.max(investAmount, 1) },
+        reasoning: `Buying stocks — price ${market.stock_price} < threshold ${profile.stockBuyThreshold} (trend: ${market.stock_trend})`,
+      };
+    }
+    // Default: buy a modest amount
     const amount = Math.floor(status.credits * 0.15);
     return {
       action: "bank_stock",
       params: { action: "buy", amount: Math.max(amount, 1) },
-      reasoning: `Buying stocks with ${amount} credits`,
+      reasoning: `Buying stocks with ${amount} credits (price: ${market.stock_price}, trend: ${market.stock_trend})`,
     };
   }
 

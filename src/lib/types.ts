@@ -78,7 +78,8 @@ export type ActionType =
   | "follow"
   | "transfer"
   | "dm_send"
-  | "claim_chest";
+  | "claim_chest"
+  | "consolidate";
 
 export type TargetMode = "random" | "specific" | "allies" | "enemies";
 export type CombatStrategy = "aggressive" | "defensive" | "passive" | "balanced";
@@ -108,6 +109,47 @@ export interface BotStatus {
   stocks_owned: number;
   active_cds: ActiveCD[];
   inventory: InventoryItem[];
+  market?: MarketData;
+  deposits_over_24h?: BotDeposit[];
+  suggested_action?: string;
+}
+
+// --- Market & Financial Types ---
+
+export interface MarketData {
+  rate: number;
+  trend: "up" | "down" | "stable";
+  signal: "bank" | "trade" | "hold";
+  stock_price: number;
+  stock_trend: "up" | "down" | "stable";
+  time_to_peak?: number;
+  time_to_trough?: number;
+}
+
+export interface ConsolidateResult {
+  spits_sent: number;
+  gold_sent: number;
+  limits: { spits_remaining: number; gold_remaining: number };
+  bot_wealth: { credits: number; gold: number; bank_balance: number };
+}
+
+export interface BankingProfile {
+  depositPercent: number;
+  withdrawPercent: number;
+  minWalletReserve: number;
+  stockBuyThreshold: number;
+  stockSellThreshold: number;
+  consolidateReserveSpits: number;
+  consolidateReserveGold: number;
+  financialActionChance: number;
+}
+
+export interface BotDeposit {
+  id: string;
+  principal: number;
+  withdrawn: number;
+  accrued_interest: number;
+  current_value: number;
 }
 
 export interface ActiveCD {
