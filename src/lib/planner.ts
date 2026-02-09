@@ -1,4 +1,5 @@
 import { ollama } from "./ollama";
+import { supabase } from "./supabase";
 import { spitrApi } from "./spitr-api";
 import { buildActionDecisionPrompt, buildContentPrompt } from "./prompts";
 import type { DMConversation } from "./types";
@@ -45,22 +46,23 @@ function getProfile(bot: BotWithConfig): BankingProfile {
   return BANKING_PROFILES[bot.config?.banking_strategy || "conservative"] || BANKING_PROFILES.conservative;
 }
 
-// --- Consolidation Tracking (once per day per bot, in-memory) ---
+// --- Consolidation Tracking (DB-backed, survives restarts) ---
 
-const consolidatedToday = new Map<string, string>(); // bot.id → date string
-
-function hasConsolidatedToday(botId: string): boolean {
+async function hasConsolidatedToday(botId: string): Promise<boolean> {
   const today = new Date().toISOString().split("T")[0];
-  return consolidatedToday.get(botId) === today;
-}
-
-function markConsolidated(botId: string): void {
-  consolidatedToday.set(botId, new Date().toISOString().split("T")[0]);
+  const { count } = await supabase
+    .from("bot_jobs")
+    .select("*", { count: "exact", head: true })
+    .eq("bot_id", botId)
+    .eq("action_type", "consolidate")
+    .eq("status", "completed")
+    .gte("completed_at", `${today}T00:00:00.000Z`);
+  return (count || 0) > 0;
 }
 
 /** Check if bot should consolidate surplus to owner */
-function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction | null {
-  if (hasConsolidatedToday(bot.id)) return null;
+async function checkConsolidate(bot: BotWithConfig, status: BotStatus): Promise<PlannedAction | null> {
+  if (await hasConsolidatedToday(bot.id)) return null;
   if (!bot.owner_id || bot.owner_id === bot.user_id) return null;
   if (status.destroyed || status.hp === 0) return null;
 
@@ -71,7 +73,6 @@ function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction 
   // Only consolidate if there's meaningful surplus
   if (surplusSpits < 50 && surplusGold < 5) return null;
 
-  markConsolidated(bot.id);
   return {
     action: "consolidate",
     params: {
@@ -83,11 +84,11 @@ function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction 
 }
 
 /** Translate a single advisor strategy entry into a PlannedAction */
-function translateAdvisorAction(
+async function translateAdvisorAction(
   strategy: { action: string; params: Record<string, unknown>; reasoning: string },
   bot: BotWithConfig,
   status: BotStatus
-): PlannedAction | null {
+): Promise<PlannedAction | null> {
   const profile = getProfile(bot);
 
   switch (strategy.action) {
@@ -152,7 +153,7 @@ function translateAdvisorAction(
     }
 
     case "consolidate": {
-      return checkConsolidate(bot, status);
+      return await checkConsolidate(bot, status);
     }
 
     case "hold":
@@ -165,13 +166,13 @@ function translateAdvisorAction(
 }
 
 /** Advisor-driven financial action planner — walks the server's priority queue */
-function planAdvisorAction(bot: BotWithConfig, status: BotStatus): PlannedAction | null {
+async function planAdvisorAction(bot: BotWithConfig, status: BotStatus): Promise<PlannedAction | null> {
   const advisor = status.financial_advisor;
   if (!advisor || !advisor.priority_queue || advisor.priority_queue.length === 0) return null;
 
   // Walk the priority queue in order, return the first actionable one
   for (const strategy of advisor.priority_queue) {
-    const action = translateAdvisorAction(strategy, bot, status);
+    const action = await translateAdvisorAction(strategy, bot, status);
     if (action) return action;
   }
 
@@ -360,8 +361,8 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     };
   }
 
-  // Consolidation to owner (once per day, priority)
-  const consolidateAction = checkConsolidate(bot, status);
+  // Consolidation to owner (once per day, priority — DB-checked)
+  const consolidateAction = await checkConsolidate(bot, status);
   if (consolidateAction) return consolidateAction;
 
   // Priority: auto-heal if HP is critical
@@ -382,7 +383,7 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   }
 
   // Advisor-driven financial action (server-side priority queue)
-  const financialAction = planAdvisorAction(bot, status);
+  const financialAction = await planAdvisorAction(bot, status);
   if (financialAction) return financialAction;
 
   // Extract potential targets from the feed (with HP/level awareness)
@@ -630,7 +631,7 @@ export async function planSpecificAction(
   }
 
   if (actionType === "consolidate") {
-    const consolidateAction = checkConsolidate(bot, status);
+    const consolidateAction = await checkConsolidate(bot, status);
     if (consolidateAction) return consolidateAction;
     return {
       action: "post",
