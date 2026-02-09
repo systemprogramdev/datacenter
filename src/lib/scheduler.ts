@@ -152,10 +152,12 @@ class Scheduler {
   }
 
   private async processPendingJobs() {
-    // Process ALL ready pending jobs in waves of CONCURRENCY
+    // Process jobs ONE AT A TIME with a 60-second gap to avoid flooding
+    const JOB_GAP_MS = 60_000; // 1 minute between each job
+    const MAX_PER_TICK = 10; // safety cap per tick
     let processed = 0;
 
-    while (true) {
+    while (processed < MAX_PER_TICK) {
       const now = new Date().toISOString();
 
       const { data: pendingJobs, error } = await supabase
@@ -164,32 +166,40 @@ class Scheduler {
         .eq("status", "pending")
         .lte("scheduled_for", now)
         .order("scheduled_for", { ascending: true })
-        .limit(CONCURRENCY);
+        .limit(1);
 
       if (error || !pendingJobs?.length) break;
 
-      const promises = pendingJobs.map(async (job) => {
-        const botUserId = (job.bot as unknown as { user_id: string })?.user_id || job.bot_id;
-        this.state.activeJobs++;
-        try {
-          await executeJob(job as BotJob, botUserId);
-          this.state.totalProcessed++;
-        } catch (err) {
-          console.error(`[Scheduler] Job ${job.id} failed:`, err);
-          this.state.errors++;
-        } finally {
-          this.state.activeJobs--;
-        }
-      });
-
-      await Promise.all(promises);
-      processed += pendingJobs.length;
-
-      // Safety: if we've processed a ton in one tick, yield
-      if (processed >= 100) {
-        console.log(`[Scheduler] Processed ${processed} jobs this tick, yielding rest to next tick`);
-        break;
+      const job = pendingJobs[0];
+      const botUserId = (job.bot as unknown as { user_id: string })?.user_id || job.bot_id;
+      this.state.activeJobs++;
+      try {
+        await executeJob(job as BotJob, botUserId);
+        this.state.totalProcessed++;
+      } catch (err) {
+        console.error(`[Scheduler] Job ${job.id} failed:`, err);
+        this.state.errors++;
+      } finally {
+        this.state.activeJobs--;
       }
+
+      processed++;
+
+      // Wait 60s before processing the next job (unless this was the last one)
+      if (processed < MAX_PER_TICK) {
+        const { count } = await supabase
+          .from("bot_jobs")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "pending")
+          .lte("scheduled_for", new Date().toISOString());
+        if (!count || count <= 0) break;
+
+        await new Promise((resolve) => setTimeout(resolve, JOB_GAP_MS));
+      }
+    }
+
+    if (processed > 0) {
+      console.log(`[Scheduler] Processed ${processed} jobs this tick (1 per minute)`);
     }
   }
 
