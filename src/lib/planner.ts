@@ -62,6 +62,7 @@ function markConsolidated(botId: string): void {
 function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction | null {
   if (hasConsolidatedToday(bot.id)) return null;
   if (!bot.owner_id || bot.owner_id === bot.user_id) return null;
+  if (status.destroyed || status.hp === 0) return null;
 
   const profile = getProfile(bot);
   const surplusSpits = status.credits - profile.consolidateReserveSpits;

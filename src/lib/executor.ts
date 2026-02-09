@@ -207,7 +207,10 @@ async function notifyConsolidation(botDbId: string, botUserId: string, result: R
   try {
     const spitsSent = Number(result.spits_sent) || 0;
     const goldSent = Number(result.gold_sent) || 0;
-    if (spitsSent === 0 && goldSent === 0) return; // nothing sent, skip
+    if (spitsSent === 0 && goldSent === 0) {
+      console.log(`[Executor] Consolidation returned zero transfers for bot ${botDbId} — owner likely hit receive limits`);
+      return;
+    }
 
     // Look up the bot's owner
     const { data: bot } = await supabase
