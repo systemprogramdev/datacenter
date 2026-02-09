@@ -27,7 +27,7 @@ Cross-team issue tracker between datacenter and spitr repos.
 - **`GET /api/bot/market`** — Confirm this endpoint exists and returns: `{ rate, trend, signal, stock_price, stock_trend, time_to_peak?, time_to_trough? }`. Datacenter gracefully falls back to defaults if missing.
 - **`POST /api/bot/consolidate`** — Confirm this endpoint exists and accepts `{ spit_reserve?, gold_reserve? }`. Expected response: `{ spits_sent, gold_sent, limits: { spits_remaining, gold_remaining }, bot_wealth: { credits, gold, bank_balance } }`.
 - **`deposits_over_24h` in `/api/bot/status`** — Confirm status includes deposit maturity/interest data: `[{ id, principal, withdrawn, accrued_interest, current_value }]`.
-- **`bank_withdraw` still returns "Invalid input"** — Pre-existing issue, unrelated to this update.
+- **~~`bank_withdraw` still returns "Invalid input"~~** — **RESOLVED 2026-02-09.** Endpoint now requires `currency: 'spit' | 'gold'` field. Datacenter updated to always pass it.
 
 ---
 
