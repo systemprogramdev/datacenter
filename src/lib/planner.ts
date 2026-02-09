@@ -110,7 +110,7 @@ function planFinancialAction(bot: BotWithConfig, status: BotStatus, market: Mark
       if (withdrawAmount > 0) {
         return {
           action: "bank_withdraw",
-          params: { amount: withdrawAmount },
+          params: { amount: withdrawAmount, currency: "spit" },
           reasoning: `Market signal: "trade" — withdrawing ${withdrawAmount} from mature deposit (interest: ${matureDeposit.accrued_interest}, rate: ${market.rate})`,
         };
       }
@@ -478,15 +478,20 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     }
   }
 
-  // Guard bank_withdraw — clamp to actual bank balance
+  // Guard bank_withdraw — clamp to actual bank balance, ensure currency is set
   if (decision.action === "bank_withdraw") {
     const amount = Number(decision.params.amount) || 0;
     if (status.bank_balance < 1 || amount < 1) {
       decision.action = "post";
       decision.params = {};
       decision.reasoning = "No bank balance to withdraw";
-    } else if (amount > status.bank_balance) {
-      decision.params.amount = Math.floor(status.bank_balance * 0.5);
+    } else {
+      if (amount > status.bank_balance) {
+        decision.params.amount = Math.floor(status.bank_balance * 0.5);
+      }
+      if (!decision.params.currency) {
+        decision.params.currency = "spit";
+      }
     }
   }
 
@@ -657,7 +662,7 @@ export async function planSpecificAction(
     const amount = Math.max(Math.floor(status.bank_balance * withdrawPct), 1);
     return {
       action: "bank_withdraw",
-      params: { amount },
+      params: { amount, currency: "spit" },
       reasoning: `Withdrawing ${amount} credits (market: ${market.signal}, rate: ${market.rate}, trend: ${market.trend})`,
     };
   }

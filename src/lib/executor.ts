@@ -119,7 +119,7 @@ async function executeAction(
       return spitrApi.bankDeposit(botUserId, params.amount as number);
 
     case "bank_withdraw":
-      return spitrApi.bankWithdraw(botUserId, params.amount as number);
+      return spitrApi.bankWithdraw(botUserId, params.amount as number, (params.currency as "spit" | "gold") || "spit");
 
     case "buy_item":
       return spitrApi.buyItem(botUserId, params.item_type as string);

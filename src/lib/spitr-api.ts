@@ -236,10 +236,10 @@ class SpitrApiClient {
     });
   }
 
-  async bankWithdraw(botId: string, amount: number) {
+  async bankWithdraw(botId: string, amount: number, currency: "spit" | "gold" = "spit") {
     return this.request("/bank/withdraw", botId, {
       method: "POST",
-      body: { amount },
+      body: { amount, currency },
     });
   }
 
