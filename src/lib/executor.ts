@@ -36,6 +36,11 @@ export async function executeJob(job: BotJob, botUserId: string): Promise<void> 
       p_date: today,
     });
 
+    // Notify owner on successful consolidation
+    if (job.action_type === "consolidate" && result) {
+      await notifyConsolidation(job.bot_id, botUserId, result as Record<string, unknown>);
+    }
+
     emitEvent("job:completed", {
       jobId: job.id,
       botId: job.bot_id,
@@ -195,6 +200,34 @@ async function executeAction(
 
     default:
       throw new Error(`Unknown action type: ${actionType}`);
+  }
+}
+
+async function notifyConsolidation(botDbId: string, botUserId: string, result: Record<string, unknown>) {
+  try {
+    const spitsSent = Number(result.spits_sent) || 0;
+    const goldSent = Number(result.gold_sent) || 0;
+    if (spitsSent === 0 && goldSent === 0) return; // nothing sent, skip
+
+    // Look up the bot's owner
+    const { data: bot } = await supabase
+      .from("bots")
+      .select("name, owner_id")
+      .eq("id", botDbId)
+      .single();
+
+    if (!bot?.owner_id || bot.owner_id === botUserId) return;
+
+    const parts: string[] = [];
+    if (spitsSent > 0) parts.push(`${spitsSent} spits`);
+    if (goldSent > 0) parts.push(`${goldSent} gold`);
+
+    const msg = `[consolidation] sent you ${parts.join(" + ")}`;
+
+    await spitrApi.sendDM(botUserId, bot.owner_id, msg);
+    console.log(`[Executor] ${bot.name} notified owner of consolidation: ${parts.join(" + ")}`);
+  } catch (err) {
+    console.error("[Executor] Failed to notify owner of consolidation:", err);
   }
 }
 
