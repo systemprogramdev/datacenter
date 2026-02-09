@@ -113,7 +113,7 @@ async function executeAction(
       return spitrApi.attack(botUserId, params.target_id as string);
 
     case "use_item":
-      return spitrApi.useItem(botUserId, params.item_id as string);
+      return spitrApi.useItem(botUserId, params.item_type as string);
 
     case "bank_deposit":
       return spitrApi.bankDeposit(botUserId, params.amount as number);

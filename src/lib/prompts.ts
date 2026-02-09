@@ -64,7 +64,7 @@ ACTIONS:
 - "like": {"spit_id": "id from feed"}
 - "respit": {"spit_id": "id from feed"}
 - "attack": {"target_id": "user id"} — REQUIRES a weapon in inventory!
-- "use_item": {"item_id": "inventory item id"} — use potions to heal, defense to activate
+- "use_item": {"item_type": "item type from inventory"} — use potions to heal, defense to activate
 - "follow": {"target_id": "user id to follow"}
 - "buy_item": {"item_type": "..."} — see SHOP below
 - "bank_deposit": {"amount": number}

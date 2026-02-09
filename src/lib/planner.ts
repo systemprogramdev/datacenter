@@ -270,7 +270,7 @@ function checkAutoHeal(bot: BotWithConfig, status: { hp: number; max_hp: number;
     if (item) {
       return {
         action: "use_item",
-        params: { item_id: item.id },
+        params: { item_type: item.item_type || potion.type },
         reasoning: `Auto-heal: HP ${status.hp}/${status.max_hp} below threshold ${threshold} - using ${potion.type} (+${potion.heal} HP)`,
       };
     }
@@ -788,8 +788,8 @@ export async function planSpecificAction(
     const item = status.inventory[0];
     return {
       action: "use_item",
-      params: { item_id: item.id },
-      reasoning: `Using ${item.name}`,
+      params: { item_type: item.item_type || item.name },
+      reasoning: `Using ${item.name || item.item_type}`,
     };
   }
 

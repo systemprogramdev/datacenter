@@ -282,10 +282,10 @@ class SpitrApiClient {
     });
   }
 
-  async useItem(botId: string, itemId: string) {
+  async useItem(botId: string, itemType: string) {
     return this.request("/use-item", botId, {
       method: "POST",
-      body: { item_id: itemId },
+      body: { itemType },
     });
   }
 
