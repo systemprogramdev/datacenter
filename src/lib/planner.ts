@@ -141,14 +141,25 @@ function planFinancialAction(bot: BotWithConfig, status: BotStatus, market: Mark
     }
   }
 
-  // 5. Convert spits to gold when gold is critically low
+  // 5. Withdraw gold when wallet gold is low but bank has gold
+  //    (gold is needed for weapons, potions, defense — can't buy items without it)
+  if (status.gold < 5 && status.bank_balance > 10) {
+    const goldWithdraw = Math.max(Math.floor(status.bank_balance * 0.15), 1);
+    return {
+      action: "bank_withdraw",
+      params: { amount: goldWithdraw, currency: "gold" },
+      reasoning: `Wallet gold critically low (${status.gold}) — withdrawing ${goldWithdraw} gold from bank to fund purchases`,
+    };
+  }
+
+  // 6. Convert spits to gold when gold is critically low and no gold in bank
   if (status.gold < 3 && status.credits > profile.minWalletReserve + 50) {
     const convertAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.1);
     if (convertAmount > 0) {
       return {
         action: "bank_convert",
         params: { direction: "spits_to_gold", amount: convertAmount },
-        reasoning: `Gold critically low (${status.gold}) — converting ${convertAmount} spits to gold`,
+        reasoning: `Gold critically low (${status.gold}), no gold in bank — converting ${convertAmount} spits to gold`,
       };
     }
   }
@@ -655,7 +666,19 @@ export async function planSpecificAction(
         reasoning: "No bank balance to withdraw",
       };
     }
-    // Market-aware: withdraw more when signal says "trade", less when "bank"
+
+    // Smart currency pick: if wallet gold is low and bot needs items, withdraw gold
+    // Otherwise withdraw spits (the default banking currency)
+    if (status.gold < 5 && status.bank_balance > 5) {
+      const goldAmount = Math.max(Math.floor(status.bank_balance * 0.15), 1);
+      return {
+        action: "bank_withdraw",
+        params: { amount: goldAmount, currency: "gold" },
+        reasoning: `Wallet gold low (${status.gold}) — withdrawing ${goldAmount} gold for item purchases`,
+      };
+    }
+
+    // Market-aware spit withdrawal: more when signal says "trade", less when "bank"
     let withdrawPct = profile.withdrawPercent;
     if (market.signal === "trade") withdrawPct = Math.min(withdrawPct * 1.5, 0.6);
     else if (market.signal === "bank") withdrawPct = withdrawPct * 0.5;
