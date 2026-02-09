@@ -112,18 +112,20 @@ export interface BotStatus {
   market?: MarketData;
   deposits_over_24h?: BotDeposit[];
   suggested_action?: string;
+  financial_advisor?: FinancialAdvisor;
 }
 
 // --- Market & Financial Types ---
 
 export interface MarketData {
-  rate: number;
-  trend: "up" | "down" | "stable";
+  current_rate: number;
+  current_rate_percent: number;
+  rate_trend: "up" | "down" | "stable";
   signal: "bank" | "trade" | "hold";
   stock_price: number;
   stock_trend: "up" | "down" | "stable";
-  time_to_peak?: number;
-  time_to_trough?: number;
+  time_to_peak_hours?: number;
+  time_to_trough_hours?: number;
 }
 
 export interface ConsolidateResult {
@@ -141,7 +143,6 @@ export interface BankingProfile {
   stockSellThreshold: number;
   consolidateReserveSpits: number;
   consolidateReserveGold: number;
-  financialActionChance: number;
 }
 
 export interface BotDeposit {
@@ -157,6 +158,54 @@ export interface ActiveCD {
   amount: number;
   term: number;
   matures_at: string;
+  currency: "spit" | "gold";
+  rate: number;
+}
+
+// --- Financial Advisor Types (server-side) ---
+
+export interface RedeemableCD {
+  cd_id: string;
+  amount: number;
+  currency: "spit" | "gold";
+  matured: boolean;
+  rate: number;
+  matures_at: string;
+}
+
+export interface CDAdvice {
+  recommended_currency: "spit" | "gold";
+  recommended_term_days: number;
+  current_spit_rate: number;
+  current_gold_rate: number;
+  reasoning: string;
+}
+
+export interface ConversionAdvice {
+  direction: "spits_to_gold" | "gold_to_spits";
+  amount: number;
+  reasoning: string;
+}
+
+export interface ConsolidationAdvice {
+  ready: boolean;
+  spit_surplus: number;
+  gold_surplus: number;
+}
+
+export interface FinancialStrategy {
+  action: string;
+  params: Record<string, unknown>;
+  reasoning: string;
+  priority: number;
+}
+
+export interface FinancialAdvisor {
+  priority_queue: FinancialStrategy[];
+  redeemable_cds: RedeemableCD[];
+  cd_advice: CDAdvice;
+  conversion_advice: ConversionAdvice | null;
+  consolidation: ConsolidationAdvice;
 }
 
 export interface InventoryItem {

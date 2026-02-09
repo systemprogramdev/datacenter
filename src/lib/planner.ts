@@ -20,7 +20,6 @@ const BANKING_PROFILES: Record<string, BankingProfile> = {
     stockSellThreshold: 130, // sell when stock price > 130
     consolidateReserveSpits: 100,
     consolidateReserveGold: 5,
-    financialActionChance: 0.4,
   },
   balanced: {
     depositPercent: 0.4,
@@ -30,7 +29,6 @@ const BANKING_PROFILES: Record<string, BankingProfile> = {
     stockSellThreshold: 150,
     consolidateReserveSpits: 300,
     consolidateReserveGold: 15,
-    financialActionChance: 0.25,
   },
   conservative: {
     depositPercent: 0.25,
@@ -40,7 +38,6 @@ const BANKING_PROFILES: Record<string, BankingProfile> = {
     stockSellThreshold: 180,
     consolidateReserveSpits: 500,
     consolidateReserveGold: 30,
-    financialActionChance: 0.15,
   },
 };
 
@@ -84,84 +81,97 @@ function checkConsolidate(bot: BotWithConfig, status: BotStatus): PlannedAction 
   };
 }
 
-/** Market-aware financial action planner — deterministic, no Ollama */
-function planFinancialAction(bot: BotWithConfig, status: BotStatus, market: MarketData): PlannedAction | null {
+/** Translate a single advisor strategy entry into a PlannedAction */
+function translateAdvisorAction(
+  strategy: { action: string; params: Record<string, unknown>; reasoning: string },
+  bot: BotWithConfig,
+  status: BotStatus
+): PlannedAction | null {
   const profile = getProfile(bot);
 
-  // Roll probability — skip financial action most ticks
-  if (Math.random() > profile.financialActionChance) return null;
-
-  // Priority order: stock sell > withdraw mature > deposit > stock buy > convert
-
-  // 1. Sell stocks when price is high
-  if (status.stocks_owned > 0 && market.stock_price > profile.stockSellThreshold) {
-    return {
-      action: "bank_stock",
-      params: { action: "sell", amount: Math.ceil(status.stocks_owned * 0.5) },
-      reasoning: `Market signal: stock price ${market.stock_price} > sell threshold ${profile.stockSellThreshold} (trend: ${market.stock_trend}) — selling ${Math.ceil(status.stocks_owned * 0.5)} shares`,
-    };
-  }
-
-  // 2. Withdraw when market says trade and mature deposits with interest exist
-  if (market.signal === "trade" && status.deposits_over_24h && status.deposits_over_24h.length > 0) {
-    const matureDeposit = status.deposits_over_24h.find(d => d.accrued_interest > 0);
-    if (matureDeposit) {
-      const withdrawAmount = Math.floor(matureDeposit.current_value * profile.withdrawPercent);
-      if (withdrawAmount > 0) {
-        return {
-          action: "bank_withdraw",
-          params: { amount: withdrawAmount, currency: "spit" },
-          reasoning: `Market signal: "trade" — withdrawing ${withdrawAmount} from mature deposit (interest: ${matureDeposit.accrued_interest}, rate: ${market.rate})`,
-        };
-      }
-    }
-  }
-
-  // 3. Deposit when market says bank and we have surplus credits
-  if (market.signal === "bank" && status.credits > profile.minWalletReserve) {
-    const depositAmount = Math.floor((status.credits - profile.minWalletReserve) * profile.depositPercent);
-    if (depositAmount > 0) {
+  switch (strategy.action) {
+    case "redeem_cd": {
+      // Redeem the first matured CD
+      const advisor = status.financial_advisor;
+      const matured = advisor?.redeemable_cds?.find(cd => cd.matured);
+      if (!matured) return null;
       return {
-        action: "bank_deposit",
-        params: { amount: depositAmount },
-        reasoning: `Market signal: "bank" — depositing ${depositAmount} (rate: ${market.rate}, trend: ${market.trend}). Keeping ${profile.minWalletReserve} reserve`,
+        action: "bank_cd",
+        params: { action: "redeem", cd_id: matured.cd_id },
+        reasoning: `Advisor: ${strategy.reasoning} (redeeming ${matured.amount} ${matured.currency} CD)`,
       };
     }
-  }
 
-  // 4. Buy stocks when price is low
-  if (market.stock_price < profile.stockBuyThreshold && status.credits > profile.minWalletReserve + 100) {
-    const investAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.2);
-    if (investAmount > 0) {
-      return {
-        action: "bank_stock",
-        params: { action: "buy", amount: investAmount },
-        reasoning: `Market signal: stock price ${market.stock_price} < buy threshold ${profile.stockBuyThreshold} (trend: ${market.stock_trend}) — buying with ${investAmount} credits`,
-      };
-    }
-  }
-
-  // 5. Withdraw gold when wallet gold is low but bank has gold
-  //    (gold is needed for weapons, potions, defense — can't buy items without it)
-  if (status.gold < 5 && status.bank_balance > 10) {
-    const goldWithdraw = Math.max(Math.floor(status.bank_balance * 0.15), 1);
-    return {
-      action: "bank_withdraw",
-      params: { amount: goldWithdraw, currency: "gold" },
-      reasoning: `Wallet gold critically low (${status.gold}) — withdrawing ${goldWithdraw} gold from bank to fund purchases`,
-    };
-  }
-
-  // 6. Convert spits to gold when gold is critically low and no gold in bank
-  if (status.gold < 3 && status.credits > profile.minWalletReserve + 50) {
-    const convertAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.1);
-    if (convertAmount > 0) {
+    case "convert_spits":
+    case "convert_gold": {
+      const direction = (strategy.params.direction as string) || "spits_to_gold";
+      const amount = Number(strategy.params.amount) || 0;
+      if (amount < 1) return null;
       return {
         action: "bank_convert",
-        params: { direction: "spits_to_gold", amount: convertAmount },
-        reasoning: `Gold critically low (${status.gold}), no gold in bank — converting ${convertAmount} spits to gold`,
+        params: { direction, amount },
+        reasoning: `Advisor: ${strategy.reasoning}`,
       };
     }
+
+    case "buy_spit_cd":
+    case "buy_gold_cd": {
+      const currency = strategy.action === "buy_gold_cd" ? "gold" : "spit";
+      const amount = Number(strategy.params.amount) || Math.floor(status.credits * profile.depositPercent);
+      if (amount < 1) return null;
+      return {
+        action: "bank_cd",
+        params: { action: "buy", amount, term_days: 7, currency },
+        reasoning: `Advisor: ${strategy.reasoning} (7-day ${currency} CD)`,
+      };
+    }
+
+    case "deposit_at_peak_rate": {
+      const available = Math.max(status.credits - profile.minWalletReserve, 0);
+      const amount = Number(strategy.params.amount) || Math.floor(available * profile.depositPercent);
+      if (amount < 1) return null;
+      return {
+        action: "bank_deposit",
+        params: { amount },
+        reasoning: `Advisor: ${strategy.reasoning}`,
+      };
+    }
+
+    case "withdraw_matured_deposits": {
+      if (!status.deposits_over_24h || status.deposits_over_24h.length === 0) return null;
+      const matureDeposit = status.deposits_over_24h.find(d => d.accrued_interest > 0);
+      if (!matureDeposit) return null;
+      const amount = Number(strategy.params.amount) || Math.floor(matureDeposit.current_value * profile.withdrawPercent);
+      if (amount < 1) return null;
+      return {
+        action: "bank_withdraw",
+        params: { amount, currency: "spit" },
+        reasoning: `Advisor: ${strategy.reasoning}`,
+      };
+    }
+
+    case "consolidate": {
+      return checkConsolidate(bot, status);
+    }
+
+    case "hold":
+      return null;
+
+    default:
+      console.log(`[Planner] Unknown advisor action: ${strategy.action}`);
+      return null;
+  }
+}
+
+/** Advisor-driven financial action planner — walks the server's priority queue */
+function planAdvisorAction(bot: BotWithConfig, status: BotStatus): PlannedAction | null {
+  const advisor = status.financial_advisor;
+  if (!advisor || !advisor.priority_queue || advisor.priority_queue.length === 0) return null;
+
+  // Walk the priority queue in order, return the first actionable one
+  for (const strategy of advisor.priority_queue) {
+    const action = translateAdvisorAction(strategy, bot, status);
+    if (action) return action;
   }
 
   return null;
@@ -370,8 +380,8 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     };
   }
 
-  // Market-aware financial action (probabilistic per banking profile)
-  const financialAction = planFinancialAction(bot, status, market);
+  // Advisor-driven financial action (server-side priority queue)
+  const financialAction = planAdvisorAction(bot, status);
   if (financialAction) return financialAction;
 
   // Extract potential targets from the feed (with HP/level awareness)
@@ -653,7 +663,7 @@ export async function planSpecificAction(
     return {
       action: "bank_deposit",
       params: { amount },
-      reasoning: `Depositing ${amount} credits (market: ${market.signal}, rate: ${market.rate}, trend: ${market.trend})`,
+      reasoning: `Depositing ${amount} credits (market: ${market.signal}, rate: ${market.current_rate}, trend: ${market.rate_trend})`,
     };
   }
 
@@ -686,7 +696,7 @@ export async function planSpecificAction(
     return {
       action: "bank_withdraw",
       params: { amount, currency: "spit" },
-      reasoning: `Withdrawing ${amount} credits (market: ${market.signal}, rate: ${market.rate}, trend: ${market.trend})`,
+      reasoning: `Withdrawing ${amount} credits (market: ${market.signal}, rate: ${market.current_rate}, trend: ${market.rate_trend})`,
     };
   }
 
@@ -930,12 +940,24 @@ export async function planSpecificAction(
   }
 
   if (actionType === "bank_cd") {
+    // Check advisor for matured CDs to redeem first
+    const advisor = status.financial_advisor;
+    const maturedCd = advisor?.redeemable_cds?.find(cd => cd.matured);
+    if (maturedCd) {
+      return {
+        action: "bank_cd",
+        params: { action: "redeem", cd_id: maturedCd.cd_id },
+        reasoning: `Redeeming matured ${maturedCd.amount} ${maturedCd.currency} CD`,
+      };
+    }
+
+    // Buy a 7-day CD (optimal rate per advisor)
+    const currency = advisor?.cd_advice?.recommended_currency || "spit";
     const amount = Math.floor(status.credits * 0.2);
-    const term = Math.random() > 0.5 ? 30 : 7;
     return {
       action: "bank_cd",
-      params: { action: "buy", amount: Math.max(amount, 1), term },
-      reasoning: `Opening a ${term}-day CD with ${amount} credits`,
+      params: { action: "buy", amount: Math.max(amount, 1), term_days: 7, currency },
+      reasoning: `Opening a 7-day ${currency} CD with ${amount} credits (advisor: ${advisor?.cd_advice?.reasoning || "default"})`,
     };
   }
 

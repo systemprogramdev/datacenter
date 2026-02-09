@@ -1,4 +1,4 @@
-import type { BotStatus, FeedItem, DMConversation, DMMessage, BotNotification, UserLookup, MarketData, ConsolidateResult } from "./types";
+import type { BotStatus, FeedItem, DMConversation, DMMessage, BotNotification, UserLookup, MarketData, ConsolidateResult, FinancialAdvisor, RedeemableCD, FinancialStrategy, CDAdvice, ConversionAdvice, ConsolidationAdvice } from "./types";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const SPITR_API_URL = process.env.SPITR_API_URL || "https://spitr.wtf";
@@ -7,12 +7,63 @@ const DATACENTER_API_KEY = process.env.DATACENTER_API_KEY || "";
 const MARKET_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
 
 const DEFAULT_MARKET: MarketData = {
-  rate: 1.0,
-  trend: "stable",
+  current_rate: 1.0,
+  current_rate_percent: 100,
+  rate_trend: "stable",
   signal: "hold",
   stock_price: 100,
   stock_trend: "stable",
 };
+
+function parseFinancialAdvisor(raw: Record<string, unknown>): FinancialAdvisor {
+  const priorityQueue = Array.isArray(raw.priority_queue)
+    ? (raw.priority_queue as Record<string, unknown>[]).map((s): FinancialStrategy => ({
+        action: String(s.action || "hold"),
+        params: (s.params as Record<string, unknown>) || {},
+        reasoning: String(s.reasoning || ""),
+        priority: Number(s.priority) || 0,
+      }))
+    : [];
+
+  const redeemableCds = Array.isArray(raw.redeemable_cds)
+    ? (raw.redeemable_cds as Record<string, unknown>[]).map((cd): RedeemableCD => ({
+        cd_id: String(cd.cd_id || cd.id || ""),
+        amount: Number(cd.amount) || 0,
+        currency: (cd.currency as "spit" | "gold") || "spit",
+        matured: Boolean(cd.matured),
+        rate: Number(cd.rate) || 0,
+        matures_at: String(cd.matures_at || ""),
+      }))
+    : [];
+
+  const rawCd = (raw.cd_advice as Record<string, unknown>) || {};
+  const cdAdvice: CDAdvice = {
+    recommended_currency: (rawCd.recommended_currency as "spit" | "gold") || "spit",
+    recommended_term_days: Number(rawCd.recommended_term_days) || 7,
+    current_spit_rate: Number(rawCd.current_spit_rate) || 0,
+    current_gold_rate: Number(rawCd.current_gold_rate) || 0,
+    reasoning: String(rawCd.reasoning || ""),
+  };
+
+  let conversionAdvice: ConversionAdvice | null = null;
+  if (raw.conversion_advice) {
+    const rawConv = raw.conversion_advice as Record<string, unknown>;
+    conversionAdvice = {
+      direction: (rawConv.direction as "spits_to_gold" | "gold_to_spits") || "spits_to_gold",
+      amount: Number(rawConv.amount) || 0,
+      reasoning: String(rawConv.reasoning || ""),
+    };
+  }
+
+  const rawConsol = (raw.consolidation as Record<string, unknown>) || {};
+  const consolidation: ConsolidationAdvice = {
+    ready: Boolean(rawConsol.ready),
+    spit_surplus: Number(rawConsol.spit_surplus) || 0,
+    gold_surplus: Number(rawConsol.gold_surplus) || 0,
+  };
+
+  return { priority_queue: priorityQueue, redeemable_cds: redeemableCds, cd_advice: cdAdvice, conversion_advice: conversionAdvice, consolidation };
+}
 
 class SpitrApiClient {
   private baseUrl: string;
@@ -129,11 +180,19 @@ class SpitrApiClient {
       has_firewall: Boolean(raw.has_firewall),
       kevlar_charges: Number(raw.kevlar_charges) || 0,
       stocks_owned: Number(raw.stocks_owned) || 0,
-      active_cds: Array.isArray(raw.active_cds) ? (raw.active_cds as BotStatus["active_cds"]) : [],
+      active_cds: Array.isArray(raw.active_cds) ? (raw.active_cds as Record<string, unknown>[]).map(cd => ({
+        id: String(cd.id),
+        amount: Number(cd.amount) || 0,
+        term: Number(cd.term) || 7,
+        matures_at: String(cd.matures_at || ""),
+        currency: (cd.currency as "spit" | "gold") || "spit",
+        rate: Number(cd.rate) || 0,
+      })) : [],
       inventory: Array.isArray(raw.inventory) ? raw.inventory as BotStatus["inventory"] : [],
       market: raw.market ? {
-        rate: Number((raw.market as Record<string, unknown>).rate) || 1.0,
-        trend: ((raw.market as Record<string, unknown>).trend as MarketData["trend"]) || "stable",
+        current_rate: Number((raw.market as Record<string, unknown>).current_rate) || 1.0,
+        current_rate_percent: Number((raw.market as Record<string, unknown>).current_rate_percent) || 100,
+        rate_trend: ((raw.market as Record<string, unknown>).rate_trend as MarketData["rate_trend"]) || "stable",
         signal: ((raw.market as Record<string, unknown>).signal as MarketData["signal"]) || "hold",
         stock_price: Number((raw.market as Record<string, unknown>).stock_price) || 100,
         stock_trend: ((raw.market as Record<string, unknown>).stock_trend as MarketData["stock_trend"]) || "stable",
@@ -146,6 +205,7 @@ class SpitrApiClient {
         current_value: Number(d.current_value) || 0,
       })) : undefined,
       suggested_action: raw.suggested_action ? String(raw.suggested_action) : undefined,
+      financial_advisor: raw.financial_advisor ? parseFinancialAdvisor(raw.financial_advisor as Record<string, unknown>) : undefined,
     };
   }
 
@@ -301,20 +361,20 @@ class SpitrApiClient {
     });
   }
 
-  async bankCd(botId: string, action: "buy" | "redeem", opts: { amount?: number; term?: number; cdId?: string }) {
+  async bankCd(botId: string, action: "buy" | "redeem", opts: { amount?: number; termDays?: number; currency?: "spit" | "gold"; cdId?: string }) {
     if (action === "buy") {
       return this.request("/bank/cd", botId, {
         method: "POST",
-        body: { action: "buy", amount: opts.amount, term: opts.term },
+        body: { action: "buy", amount: opts.amount, term_days: opts.termDays || 7, currency: opts.currency || "spit" },
       });
     }
-    return this.request("/bank/cd", botId, {
+    return this.request("/bank/cd/redeem", botId, {
       method: "POST",
-      body: { action: "redeem", cd_id: opts.cdId },
+      body: { cd_id: opts.cdId },
     });
   }
 
-  // --- Market Intelligence ---
+  // --- Market Intelligence & Financial Advisor ---
 
   async getMarket(): Promise<MarketData> {
     // Return cached data if fresh enough
@@ -329,13 +389,14 @@ class SpitrApiClient {
     try {
       const raw = await this.requestPublic<Record<string, unknown>>("/market");
       const data: MarketData = {
-        rate: Number(raw.rate) || 1.0,
-        trend: (raw.trend as MarketData["trend"]) || "stable",
+        current_rate: Number(raw.current_rate) || 1.0,
+        current_rate_percent: Number(raw.current_rate_percent) || 100,
+        rate_trend: (raw.rate_trend as MarketData["rate_trend"]) || "stable",
         signal: (raw.signal as MarketData["signal"]) || "hold",
         stock_price: Number(raw.stock_price) || 100,
         stock_trend: (raw.stock_trend as MarketData["stock_trend"]) || "stable",
-        time_to_peak: raw.time_to_peak != null ? Number(raw.time_to_peak) : undefined,
-        time_to_trough: raw.time_to_trough != null ? Number(raw.time_to_trough) : undefined,
+        time_to_peak_hours: raw.time_to_peak_hours != null ? Number(raw.time_to_peak_hours) : undefined,
+        time_to_trough_hours: raw.time_to_trough_hours != null ? Number(raw.time_to_trough_hours) : undefined,
       };
       this.marketCache = { data, fetchedAt: Date.now() };
       return data;

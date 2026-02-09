@@ -171,7 +171,8 @@ async function executeAction(
         params.action as "buy" | "redeem",
         {
           amount: params.amount as number,
-          term: params.term as number,
+          termDays: params.term_days as number,
+          currency: (params.currency as "spit" | "gold") || "spit",
           cdId: params.cd_id as string,
         }
       );

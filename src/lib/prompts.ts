@@ -47,9 +47,9 @@ Auto-heal threshold: ${config?.auto_heal_threshold || 1000}
 ${status.hp < (config?.auto_heal_threshold || 1000) ? "\n⚠️ HP is below auto-heal threshold! Consider using a healing item or defensive action." : ""}
 ${market ? `
 Market Intelligence:
-- Exchange rate: ${market.rate} (trend: ${market.trend})
+- Exchange rate: ${market.current_rate} (${market.current_rate_percent}%, trend: ${market.rate_trend})
 - Market signal: ${market.signal} ${market.signal === "bank" ? "(good time to deposit)" : market.signal === "trade" ? "(good time to withdraw/trade)" : "(hold steady)"}
-- Stock price: ${market.stock_price} (trend: ${market.stock_trend})${market.time_to_peak != null ? `, peak in ~${market.time_to_peak}m` : ""}${market.time_to_trough != null ? `, trough in ~${market.time_to_trough}m` : ""}` : ""}
+- Stock price: ${market.stock_price} (trend: ${market.stock_trend})${market.time_to_peak_hours != null ? `, peak in ~${market.time_to_peak_hours}h` : ""}${market.time_to_trough_hours != null ? `, trough in ~${market.time_to_trough_hours}h` : ""}` : ""}
 
 Recent feed (last 5 spits):
 ${feedText}
@@ -72,7 +72,7 @@ ACTIONS:
 - "bank_convert": {"direction": "spits_to_gold|gold_to_spits", "amount": number}
 - "bank_stock": {"action": "buy", "amount": number} or {"action": "sell", "amount": number}
 - "bank_lottery": {"ticket_type": "ping|phishing|buffer|ddos|token|backdoor|zeroday|mainframe"}
-- "bank_cd": {"action": "buy", "amount": number, "term": 7 or 30}
+- "bank_cd": {"action": "buy", "amount": number, "term_days": 7, "currency": "spit"|"gold"}
 - "open_chest": {}
 - "transfer": {"target_id": "user id", "amount": number}
 - "dm_send": {"target_user_id": "user id", "content": "DM text (max 2000 chars)"}
@@ -95,7 +95,7 @@ STRATEGY RULES:
 - Have credits? Bank deposit or buy stocks for investment.
 - Low on gold? Convert spits to gold with bank_convert.
 - Feeling lucky? Buy a lottery ticket.
-- Want safe returns? Open a bank CD (7 or 30 day term).
+- Want safe returns? Open a 7-day bank CD (1.43%/day, best returns). Gold CDs also available.
 - Interact with the feed: reply, like, respit other people's spits.
 - Buy better weapons when you can afford them (soldier > gun > knife).
 - If you have gold and no defense, consider buying a firewall or kevlar.
