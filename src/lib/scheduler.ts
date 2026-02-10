@@ -244,22 +244,18 @@ class Scheduler {
 
         const pending = pendingCount || 0;
 
-        // Calculate how many actions should have happened by now
-        // based on waking hours (8am-11pm)
-        const expectedByNow = this.expectedActionsByNow(bot.action_frequency);
-        const deficit = expectedByNow - actionsUsed - pending;
+        // Only schedule if there are no pending jobs (one at a time pacing)
+        if (pending > 0) continue;
 
-        // Schedule enough to catch up, capped at MAX_BATCH_PER_BOT per tick
-        const toSchedule = Math.min(
-          Math.max(deficit, pending === 0 ? 1 : 0), // at least 1 if no pending jobs
-          MAX_BATCH_PER_BOT,
-          actionsRemaining - pending
-        );
+        // Check if it's time for the next action based on even spacing
+        const nextSlot = this.nextActionSlot(actionsUsed, bot.action_frequency);
+        const now2 = new Date();
+        if (nextSlot > now2) continue; // not time yet
 
-        if (toSchedule <= 0) continue;
+        const toSchedule = 1;
 
         console.log(
-          `[Scheduler] ${bot.name}: ${actionsUsed} used, ${pending} pending, ${expectedByNow} expected by now → scheduling ${toSchedule} actions`
+          `[Scheduler] ${bot.name}: ${actionsUsed}/${bot.action_frequency} used today, scheduling next action`
         );
 
         // Plan and schedule each action
@@ -299,34 +295,30 @@ class Scheduler {
     }
   }
 
-  /** How many actions should a bot have completed by now, based on full 24h day */
-  private expectedActionsByNow(maxActions: number): number {
-    const now = new Date();
-    // Minutes elapsed since midnight
-    const minutesSinceMidnight = now.getHours() * 60 + now.getMinutes();
-    const progress = minutesSinceMidnight / 1440; // 1440 = 24 * 60
-    return Math.floor(maxActions * progress);
-  }
-
-  private calculateScheduleTime(actionIndex: number, maxActions: number): Date {
-    // Spread actions evenly across full 24h day
-    // e.g. 50 actions/day = one every 28.8 minutes
+  /** When is the next action allowed? Spread remaining actions across remaining time in day */
+  private nextActionSlot(actionsUsed: number, maxActions: number): Date {
     const now = new Date();
     const todayMidnight = new Date(now);
     todayMidnight.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000);
 
-    const intervalMs = (24 * 60 * 60 * 1000) / maxActions;
-    const scheduled = new Date(todayMidnight.getTime() + intervalMs * actionIndex);
+    const remaining = maxActions - actionsUsed;
+    if (remaining <= 0) return endOfDay; // done for the day
 
-    // Add jitter (0-60s) so bots don't all fire at the exact same second
-    scheduled.setTime(scheduled.getTime() + Math.random() * 60000);
+    const msLeft = endOfDay.getTime() - now.getTime();
+    if (msLeft <= 0) return endOfDay; // day is over
 
-    // If scheduled time is in the past, schedule for now + small random delay
-    if (scheduled <= now) {
-      scheduled.setTime(now.getTime() + Math.random() * 30000 + 5000);
-    }
+    // Space remaining actions evenly across remaining time
+    const intervalMs = msLeft / remaining;
 
-    return scheduled;
+    // Next action = now + interval (wait one full interval before next action)
+    return new Date(now.getTime() + intervalMs);
+  }
+
+  private calculateScheduleTime(_actionIndex: number, _maxActions: number): Date {
+    // Schedule for now + small jitter (0-60s) so bots don't all fire simultaneously
+    const now = new Date();
+    return new Date(now.getTime() + Math.random() * 60000);
   }
 }
 
