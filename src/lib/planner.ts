@@ -921,20 +921,35 @@ export async function planSpecificAction(
         reasoning: `Selling ${shares} shares — price ${market.stock_price} > threshold ${profile.stockSellThreshold} (trend: ${market.stock_trend})`,
       };
     }
-    if (market.stock_price < profile.stockBuyThreshold && status.credits > profile.minWalletReserve) {
-      const investAmount = Math.floor((status.credits - profile.minWalletReserve) * 0.2);
+    // Stocks are bought from bank balance, not wallet
+    if (status.bank_balance < 1) {
+      return {
+        action: "post",
+        params: { content: "need to deposit before i can buy stocks" },
+        reasoning: "No bank balance to buy stocks",
+      };
+    }
+    if (market.stock_price < profile.stockBuyThreshold) {
+      const investAmount = Math.floor(status.bank_balance * 0.2);
       return {
         action: "bank_stock",
         params: { action: "buy", amount: Math.max(investAmount, 1) },
-        reasoning: `Buying stocks — price ${market.stock_price} < threshold ${profile.stockBuyThreshold} (trend: ${market.stock_trend})`,
+        reasoning: `Buying stocks — price ${market.stock_price} < threshold ${profile.stockBuyThreshold} (bank: ${Math.floor(status.bank_balance)}, trend: ${market.stock_trend})`,
       };
     }
-    // Default: buy a modest amount
-    const amount = Math.floor(status.credits * 0.15);
+    // Default: buy a modest amount from bank
+    const amount = Math.floor(status.bank_balance * 0.15);
+    if (amount < 1) {
+      return {
+        action: "post",
+        params: { content: "bank balance too low for stocks rn" },
+        reasoning: "Bank balance too low for stock purchase",
+      };
+    }
     return {
       action: "bank_stock",
-      params: { action: "buy", amount: Math.max(amount, 1) },
-      reasoning: `Buying stocks with ${amount} credits (price: ${market.stock_price}, trend: ${market.stock_trend})`,
+      params: { action: "buy", amount },
+      reasoning: `Buying stocks with ${amount} from bank (price: ${market.stock_price}, trend: ${market.stock_trend})`,
     };
   }
 
