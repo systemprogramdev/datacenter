@@ -141,6 +141,9 @@ class Scheduler {
     emitEvent("scheduler:tick", { time: this.state.lastTick });
 
     try {
+      // 0. Clear stale pending jobs (scheduled >2h in the future = zombie from old scheduler)
+      await this.clearStaleJobs();
+
       // 1. Process any existing pending jobs first
       await this.processPendingJobs();
 
@@ -149,6 +152,21 @@ class Scheduler {
     } catch (error) {
       console.error("[Scheduler] Tick error:", error);
       this.state.errors++;
+    }
+  }
+
+  private async clearStaleJobs() {
+    // Cancel pending jobs scheduled more than 2 hours from now (zombies from old scheduler logic)
+    const cutoff = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    const { data: stale } = await supabase
+      .from("bot_jobs")
+      .update({ status: "failed", error: "Stale job cleared — scheduled too far in future", completed_at: new Date().toISOString() })
+      .eq("status", "pending")
+      .gt("scheduled_for", cutoff)
+      .select("id");
+
+    if (stale && stale.length > 0) {
+      console.log(`[Scheduler] Cleared ${stale.length} stale pending jobs (scheduled >2h out)`);
     }
   }
 
