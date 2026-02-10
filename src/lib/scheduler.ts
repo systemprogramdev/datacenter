@@ -247,15 +247,28 @@ class Scheduler {
         // Only schedule if there are no pending jobs (one at a time pacing)
         if (pending > 0) continue;
 
-        // Check if it's time for the next action based on even spacing
-        const nextSlot = this.nextActionSlot(actionsUsed, bot.action_frequency);
-        const now2 = new Date();
-        if (nextSlot > now2) continue; // not time yet
+        // Enforce even spacing: check time since last completed action
+        const intervalMs = (24 * 60 * 60 * 1000) / bot.action_frequency;
+        const { data: lastJob } = await supabase
+          .from("bot_jobs")
+          .select("completed_at")
+          .eq("bot_id", bot.id)
+          .eq("status", "completed")
+          .gte("completed_at", `${today}T00:00:00.000Z`)
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        if (lastJob?.completed_at) {
+          const elapsed = now.getTime() - new Date(lastJob.completed_at).getTime();
+          if (elapsed < intervalMs) continue; // not time yet
+        }
+        // If no actions today, schedule immediately (first action of the day)
 
         const toSchedule = 1;
 
         console.log(
-          `[Scheduler] ${bot.name}: ${actionsUsed}/${bot.action_frequency} used today, scheduling next action`
+          `[Scheduler] ${bot.name}: ${actionsUsed}/${bot.action_frequency} used today, interval ${Math.round(intervalMs / 60000)}min, scheduling next action`
         );
 
         // Plan and schedule each action
@@ -268,10 +281,7 @@ class Scheduler {
             break;
           }
 
-          const scheduledFor = this.calculateScheduleTime(
-            actionsUsed + pending + i,
-            bot.action_frequency
-          );
+          const scheduledFor = this.calculateScheduleTime();
 
           await supabase.from("bot_jobs").insert({
             bot_id: bot.id,
@@ -295,30 +305,9 @@ class Scheduler {
     }
   }
 
-  /** When is the next action allowed? Spread remaining actions across remaining time in day */
-  private nextActionSlot(actionsUsed: number, maxActions: number): Date {
-    const now = new Date();
-    const todayMidnight = new Date(now);
-    todayMidnight.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(todayMidnight.getTime() + 24 * 60 * 60 * 1000);
-
-    const remaining = maxActions - actionsUsed;
-    if (remaining <= 0) return endOfDay; // done for the day
-
-    const msLeft = endOfDay.getTime() - now.getTime();
-    if (msLeft <= 0) return endOfDay; // day is over
-
-    // Space remaining actions evenly across remaining time
-    const intervalMs = msLeft / remaining;
-
-    // Next action = now + interval (wait one full interval before next action)
-    return new Date(now.getTime() + intervalMs);
-  }
-
-  private calculateScheduleTime(_actionIndex: number, _maxActions: number): Date {
+  private calculateScheduleTime(): Date {
     // Schedule for now + small jitter (0-60s) so bots don't all fire simultaneously
-    const now = new Date();
-    return new Date(now.getTime() + Math.random() * 60000);
+    return new Date(Date.now() + Math.random() * 60000);
   }
 }
 
