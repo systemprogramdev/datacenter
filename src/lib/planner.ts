@@ -156,11 +156,25 @@ async function translateAdvisorAction(
       return await checkConsolidate(bot, status);
     }
 
+    case "check_market_signal": {
+      // Advisor wants us to check market conditions — deposit if signal is "bank"
+      const market = status.market;
+      if (!market || market.signal !== "bank") return null;
+      const available = Math.max(status.credits - profile.minWalletReserve, 0);
+      const amount = Math.floor(available * profile.depositPercent);
+      if (amount < 1) return null;
+      return {
+        action: "bank_deposit",
+        params: { amount },
+        reasoning: `Advisor: ${strategy.reasoning} — market signal "bank", depositing ${amount}`,
+      };
+    }
+
     case "hold":
       return null;
 
     default:
-      console.log(`[Planner] Unknown advisor action: ${strategy.action}`);
+      console.log(`[Planner] Unknown advisor action: ${strategy.action}, skipping`);
       return null;
   }
 }
