@@ -60,10 +60,10 @@ export async function PATCH(
 
   if (Object.keys(configFields).length > 0) {
     configFields.updated_at = new Date().toISOString();
+    // Use upsert to handle bots that may not have a config row yet
     const { error } = await supabase
       .from("bot_configs")
-      .update(configFields)
-      .eq("bot_id", id);
+      .upsert({ bot_id: id, ...configFields }, { onConflict: "bot_id" });
     if (error) {
       return NextResponse.json({ success: false, error: error.message }, { status: 500 });
     }

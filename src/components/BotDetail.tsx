@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useBotStore } from "@/stores/botStore";
 import type { BotWithConfig, ActionType } from "@/lib/types";
 
@@ -37,6 +37,19 @@ export default function BotDetail({ bot }: BotDetailProps) {
     custom_prompt: bot.config?.custom_prompt || "",
     target_mode: bot.config?.target_mode || "random",
   });
+
+  // Re-sync editForm when bot prop changes (e.g. after save)
+  useEffect(() => {
+    setEditForm({
+      personality: bot.personality,
+      action_frequency: bot.action_frequency,
+      combat_strategy: bot.config?.combat_strategy || "balanced",
+      banking_strategy: bot.config?.banking_strategy || "conservative",
+      auto_heal_threshold: bot.config?.auto_heal_threshold || 1000,
+      custom_prompt: bot.config?.custom_prompt || "",
+      target_mode: bot.config?.target_mode || "random",
+    });
+  }, [bot]);
 
   const handleAction = async (action: string) => {
     setActionLoading(action);
