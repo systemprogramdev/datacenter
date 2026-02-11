@@ -347,7 +347,7 @@ class SpitrApiClient {
   async bankStock(botId: string, action: "buy" | "sell", amount: number) {
     return this.request("/bank/stock", botId, {
       method: "POST",
-      body: action === "buy" ? { action, amount } : { action, shares: amount },
+      body: action === "buy" ? { action, spit_amount: amount } : { action, shares: amount },
     });
   }
 

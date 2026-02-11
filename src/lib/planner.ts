@@ -161,7 +161,8 @@ async function translateAdvisorAction(
       const bankingStrategy = bot.config?.banking_strategy || "conservative";
       if (bankingStrategy === "conservative") return null;
       if (status.bank_balance < 1) return null;
-      const buyAmount = Number(strategy.params.amount) || Math.floor(status.bank_balance * 0.2);
+      // v5: advisor sends spit_amount, fall back to amount for backward compat
+      const buyAmount = Number(strategy.params.spit_amount) || Number(strategy.params.amount) || Math.floor(status.bank_balance * 0.2);
       if (buyAmount < 1) return null;
       return {
         action: "bank_stock",
@@ -382,7 +383,8 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   ]);
 
   // Destroyed guard — skip all actions if bot is dead
-  if (status.destroyed) {
+  // Check both flags: destroyed (from attack) AND hp===0 (from transfer_spits)
+  if (status.destroyed || status.hp === 0) {
     return {
       action: "post",
       params: {},
@@ -583,7 +585,8 @@ export async function planSpecificAction(
   ]);
 
   // Destroyed guard — skip all actions if bot is dead
-  if (status.destroyed) {
+  // Check both flags: destroyed (from attack) AND hp===0 (from transfer_spits)
+  if (status.destroyed || status.hp === 0) {
     return {
       action: "post",
       params: {},
