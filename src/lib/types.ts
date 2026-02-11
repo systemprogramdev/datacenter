@@ -124,6 +124,8 @@ export interface MarketData {
   signal: "bank" | "trade" | "hold";
   stock_price: number;
   stock_trend: "up" | "down" | "stable";
+  rate_position: number; // 0.0-1.0 normalized yield position
+  stock_signal: "buy" | "sell" | "hold"; // buy ≤30%, sell ≥70%, hold between
   time_to_peak_hours?: number;
   time_to_trough_hours?: number;
 }

@@ -49,7 +49,7 @@ ${market ? `
 Market Intelligence:
 - Exchange rate: ${market.current_rate} (${market.current_rate_percent}%, trend: ${market.rate_trend})
 - Market signal: ${market.signal} ${market.signal === "bank" ? "(good time to deposit)" : market.signal === "trade" ? "(good time to withdraw/trade)" : "(hold steady)"}
-- Stock price: ${market.stock_price} (trend: ${market.stock_trend})${market.time_to_peak_hours != null ? `, peak in ~${market.time_to_peak_hours}h` : ""}${market.time_to_trough_hours != null ? `, trough in ~${market.time_to_trough_hours}h` : ""}` : ""}
+- Stock price: ${market.stock_price} (trend: ${market.stock_trend}, signal: ${market.stock_signal})${market.rate_position != null ? ` — yield position: ${Math.round(market.rate_position * 100)}%` : ""}${market.time_to_peak_hours != null ? `, peak in ~${market.time_to_peak_hours}h` : ""}${market.time_to_trough_hours != null ? `, trough in ~${market.time_to_trough_hours}h` : ""}` : ""}
 
 Recent feed (last 5 spits):
 ${feedText}

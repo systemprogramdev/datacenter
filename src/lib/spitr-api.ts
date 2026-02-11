@@ -13,6 +13,8 @@ const DEFAULT_MARKET: MarketData = {
   signal: "hold",
   stock_price: 100,
   stock_trend: "stable",
+  rate_position: 0.5,
+  stock_signal: "hold",
 };
 
 function parseFinancialAdvisor(raw: Record<string, unknown>): FinancialAdvisor {
@@ -196,6 +198,8 @@ class SpitrApiClient {
         signal: ((raw.market as Record<string, unknown>).signal as MarketData["signal"]) || "hold",
         stock_price: Number((raw.market as Record<string, unknown>).stock_price) || 100,
         stock_trend: ((raw.market as Record<string, unknown>).stock_trend as MarketData["stock_trend"]) || "stable",
+        rate_position: Number((raw.market as Record<string, unknown>).rate_position) || 0.5,
+        stock_signal: ((raw.market as Record<string, unknown>).stock_signal as MarketData["stock_signal"]) || "hold",
       } as MarketData : undefined,
       deposits_over_24h: Array.isArray(raw.deposits_over_24h) ? (raw.deposits_over_24h as Record<string, unknown>[]).map(d => ({
         id: String(d.id),
@@ -395,6 +399,8 @@ class SpitrApiClient {
         signal: (raw.signal as MarketData["signal"]) || "hold",
         stock_price: Number(raw.stock_price) || 100,
         stock_trend: (raw.stock_trend as MarketData["stock_trend"]) || "stable",
+        rate_position: Number(raw.rate_position) || 0.5,
+        stock_signal: (raw.stock_signal as MarketData["stock_signal"]) || "hold",
         time_to_peak_hours: raw.time_to_peak_hours != null ? Number(raw.time_to_peak_hours) : undefined,
         time_to_trough_hours: raw.time_to_trough_hours != null ? Number(raw.time_to_trough_hours) : undefined,
       };

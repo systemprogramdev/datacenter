@@ -156,6 +156,31 @@ async function translateAdvisorAction(
       return await checkConsolidate(bot, status);
     }
 
+    case "buy_stock": {
+      // Strategy gating: conservative bots don't auto-buy stock
+      const bankingStrategy = bot.config?.banking_strategy || "conservative";
+      if (bankingStrategy === "conservative") return null;
+      if (status.bank_balance < 1) return null;
+      const buyAmount = Number(strategy.params.amount) || Math.floor(status.bank_balance * 0.2);
+      if (buyAmount < 1) return null;
+      return {
+        action: "bank_stock",
+        params: { action: "buy", amount: buyAmount },
+        reasoning: `Advisor: ${strategy.reasoning} (${buyAmount} from bank)`,
+      };
+    }
+
+    case "sell_stock": {
+      // All strategies sell at peaks
+      if (!status.stocks_owned || status.stocks_owned < 1) return null;
+      const sellAmount = Number(strategy.params.shares) || Math.ceil(status.stocks_owned * 0.5);
+      return {
+        action: "bank_stock",
+        params: { action: "sell", amount: sellAmount },
+        reasoning: `Advisor: ${strategy.reasoning} (selling ${sellAmount} shares)`,
+      };
+    }
+
     case "check_market_signal": {
       // Advisor wants us to check market conditions — deposit if signal is "bank"
       const market = status.market;
