@@ -67,8 +67,17 @@ async function checkConsolidate(bot: BotWithConfig, status: BotStatus): Promise<
   if (status.destroyed || status.hp === 0) return null;
 
   const profile = getProfile(bot);
-  const surplusSpits = status.credits - profile.consolidateReserveSpits;
-  const surplusGold = status.gold - profile.consolidateReserveGold;
+
+  // Cap consolidation at 10% of total holdings — don't drain bots
+  const maxSpitSend = Math.floor(status.credits * 0.1);
+  const maxGoldSend = Math.floor(status.gold * 0.1);
+
+  // Reserve = whichever is higher: profile minimum or 90% of holdings
+  const spitReserve = Math.max(profile.consolidateReserveSpits, status.credits - maxSpitSend);
+  const goldReserve = Math.max(profile.consolidateReserveGold, status.gold - maxGoldSend);
+
+  const surplusSpits = status.credits - spitReserve;
+  const surplusGold = status.gold - goldReserve;
 
   // Only consolidate if there's meaningful surplus
   if (surplusSpits < 50 && surplusGold < 5) return null;
@@ -76,10 +85,10 @@ async function checkConsolidate(bot: BotWithConfig, status: BotStatus): Promise<
   return {
     action: "consolidate",
     params: {
-      spit_reserve: profile.consolidateReserveSpits,
-      gold_reserve: profile.consolidateReserveGold,
+      spit_reserve: spitReserve,
+      gold_reserve: goldReserve,
     },
-    reasoning: `Daily consolidation: sending surplus (${Math.max(surplusSpits, 0)} spits, ${Math.max(surplusGold, 0)} gold) to owner. Reserve: ${profile.consolidateReserveSpits} spits, ${profile.consolidateReserveGold} gold`,
+    reasoning: `Daily consolidation: sending ~${Math.max(surplusSpits, 0)} spits, ~${Math.max(surplusGold, 0)} gold to owner (10% cap, reserve: ${spitReserve} spits, ${goldReserve} gold)`,
   };
 }
 
@@ -236,7 +245,9 @@ function trimContent(s: string, limit = MAX_CONTENT_LEN): string {
 const WEAPONS = [
   { type: "nuke", cost: 250, damage: 2500 },
   { type: "drone", cost: 100, damage: 500 },
+  { type: "emp", cost: 50, damage: 200, special: "strips all defense buffs" },
   { type: "soldier", cost: 25, damage: 100 },
+  { type: "malware", cost: 15, damage: 75, special: "steals 1 random item" },
   { type: "gun", cost: 5, damage: 25 },
   { type: "knife", cost: 1, damage: 5 },
 ];
@@ -249,6 +260,27 @@ const POTIONS = [
   { type: "soda", cost: 1, heal: 50 },
 ];
 const POTION_TYPES = POTIONS.map((p) => p.type);
+
+const POWERUPS = [
+  { type: "rage_serum", cost: 25, effect: "2x damage on next 3 attacks" },
+  { type: "critical_chip", cost: 15, effect: "30% chance 3x damage, next 5 attacks" },
+  { type: "xp_boost", cost: 10, effect: "2x XP for 1 hour" },
+];
+const POWERUP_TYPES = POWERUPS.map((p) => p.type);
+
+const DEFENSE_ITEMS = [
+  { type: "mirror_shield", cost: 40, effect: "reflects 100% of next attack" },
+  { type: "kevlar", cost: 30, effect: "blocks 3 attacks" },
+  { type: "firewall", cost: 15, effect: "blocks 1 attack" },
+];
+
+const UTILITY_ITEMS = [
+  { type: "fake_death", cost: 15, effect: "appear dead for 12h" },
+  { type: "smoke_bomb", cost: 8, effect: "clears spray paints" },
+  { type: "name_tag", cost: 5, effect: "give custom title for 24h" },
+];
+
+const ALL_ITEMS = [...WEAPONS, ...POTIONS, ...POWERUPS, ...DEFENSE_ITEMS, ...UTILITY_ITEMS];
 
 async function bootstrapFollows(bot: BotWithConfig): Promise<void> {
   // Get users from the owner's feed and auto-follow them
@@ -414,13 +446,41 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   const dmReply = await checkUnreadDMs(bot);
   if (dmReply) return dmReply;
 
-  // Defense logic: defensive bots buy firewall if they don't have one
-  if (bot.config?.combat_strategy === "defensive" && !status.has_firewall && status.gold >= 15) {
-    return {
-      action: "buy_item",
-      params: { item_type: "firewall" },
-      reasoning: "Defensive bot without firewall - buying one (blocks 1 attack)",
-    };
+  // Defense logic: defensive bots buy best affordable defense
+  if (bot.config?.combat_strategy === "defensive" && !status.has_firewall && status.kevlar_charges === 0) {
+    const affordableDefense = DEFENSE_ITEMS.find((d) => status.gold >= d.cost);
+    if (affordableDefense) {
+      return {
+        action: "buy_item",
+        params: { item_type: affordableDefense.type },
+        reasoning: `Defensive bot with no active defense — buying ${affordableDefense.type} (${affordableDefense.effect})`,
+      };
+    }
+  }
+
+  // Pre-attack powerup: aggressive bots buy rage_serum/critical_chip if they have a weapon and no active powerup
+  if (bot.config?.combat_strategy === "aggressive") {
+    const hasWeapon = status.inventory.some((i) => WEAPON_TYPES.includes(i.item_type?.toLowerCase() || ""));
+    const hasPowerup = status.inventory.some((i) => POWERUP_TYPES.includes(i.item_type?.toLowerCase() || ""));
+    if (hasWeapon && !hasPowerup && status.gold >= 25) {
+      return {
+        action: "buy_item",
+        params: { item_type: "rage_serum" },
+        reasoning: "Aggressive bot with weapon — buying Rage Serum (2x damage on next 3 attacks)",
+      };
+    }
+  }
+
+  // XP boost: any bot with gold can grab cheap XP boost for leveling
+  if (status.gold >= 10 && status.level < 10) {
+    const hasXpBoost = status.inventory.some((i) => i.item_type?.toLowerCase() === "xp_boost");
+    if (!hasXpBoost && Math.random() < 0.15) {
+      return {
+        action: "buy_item",
+        params: { item_type: "xp_boost" },
+        reasoning: `Low level (${status.level}) — buying XP Boost (2x XP for 1 hour, only 10g)`,
+      };
+    }
   }
 
   // Advisor-driven financial action (server-side priority queue)
@@ -510,8 +570,7 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
   // Guard buy_item — check bot can actually afford it
   if (decision.action === "buy_item") {
     const itemType = String(decision.params.item_type || "");
-    const itemCost = [...WEAPONS, ...POTIONS, { type: "firewall", cost: 15 }, { type: "kevlar", cost: 30 }, { type: "spray_paint", cost: 5 }]
-      .find((i) => i.type === itemType)?.cost || 1;
+    const itemCost = ALL_ITEMS.find((i) => i.type === itemType)?.cost || 1;
     if (status.gold < itemCost) {
       // Can't afford what Ollama picked — buy cheapest thing we can, or bail
       const affordable = WEAPONS.find((w) => status.gold >= w.cost);
@@ -829,6 +888,15 @@ export async function planSpecificAction(
   }
 
   if (actionType === "use_item" && status.inventory.length > 0) {
+    // Route powerups to the correct endpoint
+    const powerup = status.inventory.find((i) => POWERUP_TYPES.includes(i.item_type?.toLowerCase() || ""));
+    if (powerup) {
+      return {
+        action: "use_powerup",
+        params: { item_type: powerup.item_type },
+        reasoning: `Activating powerup: ${powerup.item_type}`,
+      };
+    }
     const item = status.inventory[0];
     return {
       action: "use_item",
@@ -1078,6 +1146,71 @@ export async function planSpecificAction(
       params: { target_user_id: targetUserId, content },
       reasoning: `DMing @${targetHandle}`,
     };
+  }
+
+  if (actionType === "use_powerup") {
+    // Use a powerup from inventory, or buy the best one
+    const ownedPowerup = status.inventory.find((i) => POWERUP_TYPES.includes(i.item_type?.toLowerCase() || ""));
+    if (ownedPowerup) {
+      return {
+        action: "use_powerup",
+        params: { item_type: ownedPowerup.item_type },
+        reasoning: `Activating ${ownedPowerup.item_type}`,
+      };
+    }
+    const affordable = POWERUPS.find((p) => status.gold >= p.cost);
+    if (affordable) {
+      return {
+        action: "buy_item",
+        params: { item_type: affordable.type },
+        reasoning: `No powerup in inventory — buying ${affordable.type} (${affordable.effect})`,
+      };
+    }
+    return { action: "post", params: {}, reasoning: "No gold for powerups" };
+  }
+
+  if (actionType === "use_smoke_bomb") {
+    const hasBomb = status.inventory.some((i) => i.item_type?.toLowerCase() === "smoke_bomb");
+    if (hasBomb) {
+      return { action: "use_smoke_bomb", params: {}, reasoning: "Using smoke bomb to clear spray paints" };
+    }
+    if (status.gold >= 8) {
+      return { action: "buy_item", params: { item_type: "smoke_bomb" }, reasoning: "Buying smoke bomb (8g)" };
+    }
+    return { action: "post", params: {}, reasoning: "No gold for smoke bomb" };
+  }
+
+  if (actionType === "use_fake_death") {
+    const hasFakeDeath = status.inventory.some((i) => i.item_type?.toLowerCase() === "fake_death");
+    if (hasFakeDeath) {
+      return { action: "use_fake_death", params: {}, reasoning: "Activating fake death — appear dead for 12h" };
+    }
+    if (status.gold >= 15) {
+      return { action: "buy_item", params: { item_type: "fake_death" }, reasoning: "Buying fake death (15g)" };
+    }
+    return { action: "post", params: {}, reasoning: "No gold for fake death" };
+  }
+
+  if (actionType === "use_name_tag") {
+    const hasTag = status.inventory.some((i) => i.item_type?.toLowerCase() === "name_tag");
+    if (!hasTag && status.gold >= 5) {
+      return { action: "buy_item", params: { item_type: "name_tag" }, reasoning: "Buying name tag (5g)" };
+    }
+    // Pick a random target from feed
+    const tagTargets = feed
+      .filter((f) => f.user_id !== bot.user_id)
+      .map((f) => ({ id: f.user_id, handle: f.handle }));
+    if (hasTag && tagTargets.length > 0) {
+      const target = tagTargets[Math.floor(Math.random() * tagTargets.length)];
+      const titles = ["noob", "legend", "bot food", "big spender", "menace", "certified hater", "NPC"];
+      const title = titles[Math.floor(Math.random() * titles.length)];
+      return {
+        action: "use_name_tag",
+        params: { target_user_id: target.id, custom_title: title },
+        reasoning: `Tagging @${target.handle} as "${title}"`,
+      };
+    }
+    return { action: "post", params: {}, reasoning: "No name tag or targets" };
   }
 
   // Final fallback: use Ollama to decide (should rarely reach here)

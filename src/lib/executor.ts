@@ -198,6 +198,22 @@ async function executeAction(
         gold_reserve: params.gold_reserve as number | undefined,
       });
 
+    case "use_powerup":
+      return spitrApi.usePowerup(botUserId, params.item_type as string);
+
+    case "use_smoke_bomb":
+      return spitrApi.useSmokeBomb(botUserId);
+
+    case "use_fake_death":
+      return spitrApi.useFakeDeath(botUserId);
+
+    case "use_name_tag":
+      return spitrApi.useNameTag(
+        botUserId,
+        params.target_user_id as string,
+        params.custom_title as string
+      );
+
     default:
       throw new Error(`Unknown action type: ${actionType}`);
   }

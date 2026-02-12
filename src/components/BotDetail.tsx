@@ -10,9 +10,9 @@ interface BotDetailProps {
 
 const ALL_ACTIONS: ActionType[] = [
   "post", "reply", "like", "respit", "attack", "follow",
-  "buy_item", "use_item", "open_chest", "claim_chest", "dm_send",
+  "buy_item", "use_item", "use_powerup", "open_chest", "claim_chest", "dm_send",
   "bank_deposit", "bank_withdraw", "bank_convert", "bank_stock", "bank_lottery", "bank_cd",
-  "transfer", "consolidate",
+  "transfer", "consolidate", "use_smoke_bomb", "use_fake_death", "use_name_tag",
 ];
 
 export default function BotDetail({ bot }: BotDetailProps) {

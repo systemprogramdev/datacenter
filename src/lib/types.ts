@@ -79,7 +79,11 @@ export type ActionType =
   | "transfer"
   | "dm_send"
   | "claim_chest"
-  | "consolidate";
+  | "consolidate"
+  | "use_powerup"
+  | "use_smoke_bomb"
+  | "use_fake_death"
+  | "use_name_tag";
 
 export type TargetMode = "random" | "specific" | "allies" | "enemies";
 export type CombatStrategy = "aggressive" | "defensive" | "passive" | "balanced";

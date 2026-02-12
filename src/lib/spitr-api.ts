@@ -518,6 +518,36 @@ class SpitrApiClient {
     }
   }
 
+  // --- Powerups & Utility ---
+
+  async usePowerup(botId: string, itemType: string) {
+    return this.request("/use-powerup", botId, {
+      method: "POST",
+      body: { itemType },
+    });
+  }
+
+  async useSmokeBomb(botId: string) {
+    return this.request("/use-smoke-bomb", botId, {
+      method: "POST",
+      body: {},
+    });
+  }
+
+  async useFakeDeath(botId: string) {
+    return this.request("/use-fake-death", botId, {
+      method: "POST",
+      body: {},
+    });
+  }
+
+  async useNameTag(botId: string, targetUserId: string, customTitle: string) {
+    return this.request("/use-name-tag", botId, {
+      method: "POST",
+      body: { targetUserId, customTitle },
+    });
+  }
+
   // --- Daily Chest ---
 
   async claimChest(botId: string) {
