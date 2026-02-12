@@ -7,9 +7,26 @@ import type {
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.1:8b";
 
+export interface TokenStats {
+  total_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  total_duration_ms: number;
+  started_at: string;
+}
+
 export class OllamaClient {
   private baseUrl: string;
   private model: string;
+  private stats: TokenStats = {
+    total_calls: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    total_duration_ms: 0,
+    started_at: new Date().toISOString(),
+  };
 
   constructor(baseUrl?: string, model?: string) {
     this.baseUrl = baseUrl || OLLAMA_URL;
@@ -41,8 +58,19 @@ export class OllamaClient {
       throw new Error(`Ollama error: ${res.status} ${res.statusText}`);
     }
 
-    const data: OllamaGenerateResponse = await res.json();
-    return data.response;
+    const data = await res.json();
+
+    // Track token usage
+    const promptTokens = Number(data.prompt_eval_count) || 0;
+    const completionTokens = Number(data.eval_count) || 0;
+    const durationNs = Number(data.total_duration) || 0;
+    this.stats.total_calls++;
+    this.stats.prompt_tokens += promptTokens;
+    this.stats.completion_tokens += completionTokens;
+    this.stats.total_tokens += promptTokens + completionTokens;
+    this.stats.total_duration_ms += Math.round(durationNs / 1_000_000);
+
+    return data.response as string;
   }
 
   async generateJSON<T = Record<string, unknown>>(
@@ -85,6 +113,10 @@ export class OllamaClient {
 
   getBaseUrl(): string {
     return this.baseUrl;
+  }
+
+  getTokenStats(): TokenStats {
+    return { ...this.stats };
   }
 }
 

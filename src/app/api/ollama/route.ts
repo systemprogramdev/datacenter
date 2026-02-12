@@ -16,6 +16,7 @@ export async function GET() {
           name: m.name,
           size: m.size,
         })),
+        tokenStats: ollama.getTokenStats(),
       },
     });
   } catch (error) {
