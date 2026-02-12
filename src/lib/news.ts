@@ -130,6 +130,11 @@ function decodeEntities(str: string): string {
 const cache = new Map<string, { articles: NewsArticle[]; fetchedAt: number }>();
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 
+// Track recently posted article links to avoid duplicates across bots
+const recentlyPosted = new Set<string>();
+const POSTED_TTL = 4 * 60 * 60 * 1000; // clear every 4 hours
+let lastPostedClear = Date.now();
+
 async function fetchFeed(url: string): Promise<NewsArticle[]> {
   try {
     const res = await fetch(url, {
@@ -165,12 +170,24 @@ async function getArticlesForTopic(topic: string): Promise<NewsArticle[]> {
 
 /** Get a relevant news article for a bot based on its personality */
 export async function getNewsForBot(bot: BotWithConfig): Promise<NewsArticle | null> {
+  // Clear posted set periodically
+  if (Date.now() - lastPostedClear > POSTED_TTL) {
+    recentlyPosted.clear();
+    lastPostedClear = Date.now();
+  }
+
   const topics = getTopicsForBot(bot);
   const topic = topics[Math.floor(Math.random() * topics.length)];
 
   const articles = await getArticlesForTopic(topic);
   if (articles.length === 0) return null;
 
-  // Pick a random article
-  return articles[Math.floor(Math.random() * articles.length)];
+  // Filter out already-posted articles
+  const fresh = articles.filter((a) => !recentlyPosted.has(a.link));
+  if (fresh.length === 0) return null;
+
+  // Pick a random fresh article and mark it as posted
+  const pick = fresh[Math.floor(Math.random() * fresh.length)];
+  recentlyPosted.add(pick.link);
+  return pick;
 }
