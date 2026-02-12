@@ -233,6 +233,39 @@ class Scheduler {
 
     const now = new Date();
     const today = now.toISOString().split("T")[0];
+    const botIds = bots.map((b) => b.id);
+
+    // Batch query 1: daily action counts for all bots
+    const { data: dailyRows } = await supabase
+      .from("bot_daily_actions")
+      .select("bot_id, actions_used")
+      .in("bot_id", botIds)
+      .eq("action_date", today);
+    const dailyMap = new Map((dailyRows || []).map((d) => [d.bot_id, d.actions_used]));
+
+    // Batch query 2: pending job counts for all bots
+    const { data: pendingRows } = await supabase
+      .from("bot_jobs")
+      .select("bot_id")
+      .in("bot_id", botIds)
+      .eq("status", "pending");
+    const pendingSet = new Set((pendingRows || []).map((j) => j.bot_id));
+
+    // Batch query 3: last completed job per bot today
+    const { data: lastJobRows } = await supabase
+      .from("bot_jobs")
+      .select("bot_id, completed_at")
+      .in("bot_id", botIds)
+      .eq("status", "completed")
+      .gte("completed_at", `${today}T00:00:00.000Z`)
+      .order("completed_at", { ascending: false });
+    // Keep only the most recent per bot
+    const lastJobMap = new Map<string, string>();
+    for (const row of lastJobRows || []) {
+      if (!lastJobMap.has(row.bot_id)) {
+        lastJobMap.set(row.bot_id, row.completed_at);
+      }
+    }
 
     for (const row of bots) {
       const bot: BotWithConfig = {
@@ -241,44 +274,19 @@ class Scheduler {
       };
 
       try {
-        // Check daily action count
-        const { data: daily } = await supabase
-          .from("bot_daily_actions")
-          .select("actions_used")
-          .eq("bot_id", bot.id)
-          .eq("action_date", today)
-          .single();
-
-        const actionsUsed = daily?.actions_used || 0;
+        const actionsUsed = dailyMap.get(bot.id) || 0;
         const actionsRemaining = bot.action_frequency - actionsUsed;
         if (actionsRemaining <= 0) continue;
 
-        // Count existing pending jobs so we don't double-schedule
-        const { count: pendingCount } = await supabase
-          .from("bot_jobs")
-          .select("*", { count: "exact", head: true })
-          .eq("bot_id", bot.id)
-          .eq("status", "pending");
-
-        const pending = pendingCount || 0;
-
         // Only schedule if there are no pending jobs (one at a time pacing)
-        if (pending > 0) continue;
+        if (pendingSet.has(bot.id)) continue;
 
         // Enforce even spacing: check time since last completed action
         const intervalMs = (24 * 60 * 60 * 1000) / bot.action_frequency;
-        const { data: lastJob } = await supabase
-          .from("bot_jobs")
-          .select("completed_at")
-          .eq("bot_id", bot.id)
-          .eq("status", "completed")
-          .gte("completed_at", `${today}T00:00:00.000Z`)
-          .order("completed_at", { ascending: false })
-          .limit(1)
-          .single();
+        const lastCompletedAt = lastJobMap.get(bot.id);
 
-        if (lastJob?.completed_at) {
-          const elapsed = now.getTime() - new Date(lastJob.completed_at).getTime();
+        if (lastCompletedAt) {
+          const elapsed = now.getTime() - new Date(lastCompletedAt).getTime();
           if (elapsed < intervalMs) continue; // not time yet
         }
         // If no actions today, schedule immediately (first action of the day)
