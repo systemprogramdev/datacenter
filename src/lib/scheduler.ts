@@ -76,7 +76,7 @@ async function pickAndPlanAction(bot: BotWithConfig) {
   return planAction(bot);
 }
 
-const TICK_INTERVAL = parseInt(process.env.SCHEDULER_TICK_INTERVAL || "600000", 10);
+const TICK_INTERVAL = parseInt(process.env.SCHEDULER_TICK_INTERVAL || "300000", 10);
 const CONCURRENCY = parseInt(process.env.SCHEDULER_CONCURRENCY || "5", 10);
 const MAX_BATCH_PER_BOT = parseInt(process.env.SCHEDULER_MAX_BATCH || "1", 10);
 
