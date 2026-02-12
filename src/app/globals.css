@@ -94,10 +94,10 @@ body {
 
 /* ── Stat cards ───────────────────────────────── */
 .stat-value {
-  font-size: 1.75rem;
+  font-size: 1.3rem;
   font-weight: 700;
   line-height: 1;
-  margin-top: 0.2rem;
+  margin-top: 0.15rem;
 }
 
 .stat-label {
@@ -251,11 +251,11 @@ body {
 /* ── Grid layouts ─────────────────────────────── */
 .grid-stats {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 0.6rem;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.4rem;
 }
 @media (max-width: 1024px) {
-  .grid-stats { grid-template-columns: repeat(3, 1fr); }
+  .grid-stats { grid-template-columns: repeat(4, 1fr); }
 }
 @media (max-width: 640px) {
   .grid-stats { grid-template-columns: repeat(2, 1fr); }
