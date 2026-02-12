@@ -27,6 +27,7 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
     pendingJobs: 0,
     schedulerRunning: false,
     ollamaConnected: false,
+    totalTokens: 0,
   },
   schedulerState: {
     running: false,
@@ -50,14 +51,23 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
 
   fetchStats: async () => {
     try {
-      const res = await fetch("/api/stats");
-      const { data } = await res.json();
+      const [statsRes, ollamaRes] = await Promise.all([
+        fetch("/api/stats"),
+        fetch("/api/ollama").catch(() => null),
+      ]);
+      const { data } = await statsRes.json();
+      let totalTokens = get().stats.totalTokens;
+      if (ollamaRes) {
+        const ollamaData = await ollamaRes.json();
+        totalTokens = ollamaData?.data?.tokenStats?.total_tokens || 0;
+      }
       if (data) {
         set({
           stats: {
             ...data,
             schedulerRunning: get().schedulerState.running,
             ollamaConnected: get().stats.ollamaConnected,
+            totalTokens,
           },
         });
       }

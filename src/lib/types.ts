@@ -318,6 +318,7 @@ export interface DashboardStats {
   pendingJobs: number;
   schedulerRunning: boolean;
   ollamaConnected: boolean;
+  totalTokens: number;
 }
 
 // --- SSE Event Types ---

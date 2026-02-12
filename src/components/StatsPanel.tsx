@@ -15,6 +15,7 @@ export default function StatsPanel() {
     { label: "COMPLETED", value: stats.completedJobsToday, color: "var(--sys-success)" },
     { label: "FAILED", value: stats.failedJobsToday, color: "var(--sys-danger)" },
     { label: "PENDING", value: stats.pendingJobs, color: "var(--sys-warning)" },
+    { label: "TOKENS", value: stats.totalTokens.toLocaleString(), color: "var(--sys-accent)" },
   ];
 
   return (
