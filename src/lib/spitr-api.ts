@@ -556,6 +556,129 @@ class SpitrApiClient {
       body: {},
     });
   }
+
+  // --- Sybil ---
+
+  async createSybilAccount(
+    ownerUserId: string,
+    name: string,
+    handle: string,
+    avatarUrl: string | null,
+    bannerUrl: string | null
+  ): Promise<{ user_id: string }> {
+    if (this.dryRun) {
+      console.log(`[DRY RUN] createSybilAccount for owner ${ownerUserId}: ${name} (@${handle})`);
+      return { user_id: `dry-sybil-${Date.now()}` };
+    }
+
+    const url = `${this.baseUrl}/api/bot/sybil/create`;
+    console.log(`[SpitrAPI] POST ${url} (sybil create for owner: ${ownerUserId.slice(0, 8)}...)`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datacenter-Key": this.apiKey,
+      },
+      body: JSON.stringify({
+        owner_user_id: ownerUserId,
+        name,
+        handle,
+        avatar_url: avatarUrl,
+        banner_url: bannerUrl,
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr sybil create error ${res.status}: ${text}`);
+    }
+
+    const data = await res.json();
+    return { user_id: String(data.user_id || data.id) };
+  }
+
+  async getUserSpits(userId: string, limit = 5): Promise<{ id: string; content: string; created_at: string }[]> {
+    if (this.dryRun) {
+      return [{ id: "mock-spit-1", content: "mock post for dry run", created_at: new Date().toISOString() }];
+    }
+
+    const url = `${this.baseUrl}/api/bot/user/spits?user_id=${encodeURIComponent(userId)}&limit=${limit}`;
+    console.log(`[SpitrAPI] GET ${url}`);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datacenter-Key": this.apiKey,
+      },
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr user spits error ${res.status}: ${text}`);
+    }
+
+    const raw = await res.json();
+    const spits = Array.isArray(raw) ? raw : Array.isArray(raw.spits) ? raw.spits : [];
+    return spits.map((s: Record<string, unknown>) => ({
+      id: String(s.id),
+      content: String(s.content || ""),
+      created_at: String(s.created_at),
+    }));
+  }
+
+  async uploadSybilImage(imageBuffer: Uint8Array, filename: string): Promise<string> {
+    if (this.dryRun) {
+      console.log(`[DRY RUN] uploadSybilImage: ${filename}`);
+      return `https://example.com/dry-run/${filename}`;
+    }
+
+    const url = `${this.baseUrl}/api/bot/sybil/upload-image`;
+    console.log(`[SpitrAPI] POST ${url} (upload: ${filename})`);
+
+    const formData = new FormData();
+    formData.append("file", new Blob([imageBuffer as unknown as BlobPart]), filename);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-Datacenter-Key": this.apiKey,
+      },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr image upload error ${res.status}: ${text}`);
+    }
+
+    const data = await res.json();
+    return String(data.url || data.image_url || "");
+  }
+
+  async purchaseSybilServer(ownerUserId: string): Promise<{ success: boolean }> {
+    if (this.dryRun) {
+      console.log(`[DRY RUN] purchaseSybilServer for ${ownerUserId}`);
+      return { success: true };
+    }
+
+    const url = `${this.baseUrl}/api/bot/sybil/purchase`;
+    console.log(`[SpitrAPI] POST ${url} (purchase for owner: ${ownerUserId.slice(0, 8)}...)`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datacenter-Key": this.apiKey,
+      },
+      body: JSON.stringify({ owner_user_id: ownerUserId }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr sybil purchase error ${res.status}: ${text}`);
+    }
+
+    return { success: true };
+  }
 }
 
 export const spitrApi = new SpitrApiClient();

@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { supabase } from "./supabase";
 import { planAction, planSpecificAction } from "./planner";
 import { executeJob } from "./executor";
+import { sybilScheduler } from "./sybil-scheduler";
 import type {
   BotWithConfig,
   BotJob,
@@ -108,6 +109,9 @@ class Scheduler {
     // Then tick on interval
     this.timer = setInterval(() => this.tick(), TICK_INTERVAL);
 
+    // Start sybil scheduler in parallel
+    sybilScheduler.start();
+
     console.log(`[Scheduler] Started. Tick every ${TICK_INTERVAL / 1000}s, concurrency: ${CONCURRENCY}`);
   }
 
@@ -118,6 +122,9 @@ class Scheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+
+    // Stop sybil scheduler
+    sybilScheduler.stop();
 
     this.state.running = false;
     this.state.paused = false;

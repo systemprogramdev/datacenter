@@ -332,7 +332,13 @@ export type SSEEventType =
   | "job:completed"
   | "job:failed"
   | "bot:action"
-  | "stats:update";
+  | "stats:update"
+  | "sybil:tick"
+  | "sybil:deployed"
+  | "sybil:reaction"
+  | "sybil:job_completed"
+  | "sybil:job_failed"
+  | "sybil:health_check";
 
 export interface SSEEvent {
   type: SSEEventType;
@@ -374,4 +380,67 @@ export interface OllamaModel {
   size: number;
   digest: string;
   modified_at: string;
+}
+
+// ============================================================
+// Sybil Server Types
+// ============================================================
+
+export type SybilServerStatus = "provisioning" | "active" | "suspended";
+export type SybilJobActionType = "like" | "reply" | "respit";
+
+export interface SybilServer {
+  id: string;
+  owner_user_id: string;
+  status: SybilServerStatus;
+  max_sybils: number;
+  last_owner_spit_id: string | null;
+  last_owner_poll_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SybilBot {
+  id: string;
+  server_id: string;
+  user_id: string | null;
+  name: string;
+  handle: string;
+  avatar_url: string | null;
+  banner_url: string | null;
+  hp: number;
+  is_alive: boolean;
+  is_deployed: boolean;
+  deploy_started_at: string | null;
+  deployed_at: string | null;
+  died_at: string | null;
+  created_at: string;
+}
+
+export interface SybilResponseCache {
+  id: string;
+  server_id: string;
+  spit_id: string;
+  response_text: string;
+  used: boolean;
+}
+
+export interface SybilJob {
+  id: string;
+  server_id: string;
+  sybil_bot_id: string;
+  action_type: SybilJobActionType;
+  action_payload: Record<string, unknown>;
+  status: JobStatus;
+  scheduled_for: string;
+  started_at: string | null;
+  completed_at: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export interface SybilServerWithStats extends SybilServer {
+  alive_count: number;
+  total_count: number;
+  deployed_count: number;
 }
