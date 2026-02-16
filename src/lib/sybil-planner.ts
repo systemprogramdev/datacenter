@@ -25,13 +25,12 @@ export async function generateName(existingNames?: Set<string>): Promise<{ name:
   const MAX_RETRIES = 3;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const prompt = `Generate a realistic social media user profile. The user is on a Twitter-like platform called SPITr.
+    const prompt = `Generate a realistic person's social media profile. This should look like a real human being on Twitter.
 Return JSON with exactly two fields:
-- "name": a display name (1-3 words, can be a real-sounding name or internet alias)
-- "handle": a username (lowercase, no spaces, no @, 3-15 chars, may include underscores or numbers)
+- "name": a realistic full name (first + last). Use diverse ethnicities and backgrounds. Examples: Marcus Thompson, Priya Sharma, Emily Rodriguez, James O'Brien, Yuki Tanaka, Aaliyah Jackson, Devon Mitchell, Sofia Reyes
+- "handle": a realistic username based on the name (lowercase, no spaces, no @, 3-15 chars). Should look like something a real person would pick — use parts of their name, maybe add a number. Examples: marcust94, priya_sharma, emrodriguez, jamesobrien7, yukitanaka, aaliyah_j, devmitch, sofiareyes22
 
-Be creative and varied. Examples of good handles: xdarkknightx, sarah_codes, memequeen99, trade_guru, anon_whale
-Examples of good names: Dark Knight, Sarah Chen, Meme Queen, TradeGuru, Anonymous Whale
+Do NOT use internet slang, memes, or edgy aliases. These should pass as real people.
 
 Return ONLY the JSON object, nothing else.`;
 

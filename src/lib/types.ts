@@ -342,7 +342,8 @@ export type SSEEventType =
   | "sybil:reaction"
   | "sybil:job_completed"
   | "sybil:job_failed"
-  | "sybil:health_check";
+  | "sybil:health_check"
+  | "sybil:image_repaired";
 
 export interface SSEEvent {
   type: SSEEventType;

@@ -7,22 +7,54 @@ export async function GET(req: Request) {
   const botId = searchParams.get("bot_id");
   const limit = parseInt(searchParams.get("limit") || "50", 10);
 
-  let query = supabase
+  // Fetch bot_jobs
+  let botQuery = supabase
     .from("bot_jobs")
     .select("*, bot:bots(name, handle)")
     .order("created_at", { ascending: false })
     .limit(limit);
 
-  if (status) query = query.eq("status", status);
-  if (botId) query = query.eq("bot_id", botId);
+  if (status) botQuery = botQuery.eq("status", status);
+  if (botId) botQuery = botQuery.eq("bot_id", botId);
 
-  const { data, error } = await query;
+  const { data: botJobs, error } = await botQuery;
 
   if (error) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ success: true, data: data || [] });
+  // Fetch sybil_jobs (unless filtering by bot_id)
+  let sybilJobs: Record<string, unknown>[] = [];
+  if (!botId) {
+    let sybilQuery = supabase
+      .from("sybil_jobs")
+      .select("*, sybil_bot:sybil_bots(name, handle)")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+
+    if (status) sybilQuery = sybilQuery.eq("status", status);
+
+    const { data: sybilData } = await sybilQuery;
+    if (sybilData) {
+      sybilJobs = sybilData.map((j) => ({
+        ...j,
+        bot_id: j.sybil_bot_id,
+        bot: j.sybil_bot,
+        _source: "sybil",
+      }));
+    }
+  }
+
+  // Merge and sort by created_at descending
+  const all = [...(botJobs || []), ...sybilJobs]
+    .sort((a, b) => {
+      const aTime = new Date(a.created_at as string).getTime();
+      const bTime = new Date(b.created_at as string).getTime();
+      return bTime - aTime;
+    })
+    .slice(0, limit);
+
+  return NextResponse.json({ success: true, data: all });
 }
 
 export async function POST(req: Request) {

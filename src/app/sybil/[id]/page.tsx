@@ -64,7 +64,7 @@ export default function SybilServerDetailPage({
           <span className={`badge ${server.status === "active" ? "badge-success" : server.status === "provisioning" ? "badge-warning" : "badge-danger"} badge-pill`}>
             {server.status.toUpperCase()}
           </span>
-          {server.status === "provisioning" && (
+          {(server.status === "provisioning" || server.status === "suspended") && (
             <button
               onClick={() => activateServer(server.id)}
               className="btn btn-sm btn-success"

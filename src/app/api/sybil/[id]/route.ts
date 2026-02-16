@@ -86,9 +86,9 @@ export async function PATCH(
     );
   }
 
-  if (server.status !== "provisioning") {
+  if (server.status !== "provisioning" && server.status !== "suspended") {
     return NextResponse.json(
-      { success: false, error: "Server is not in provisioning state" },
+      { success: false, error: "Server is already active" },
       { status: 400 }
     );
   }

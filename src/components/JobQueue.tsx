@@ -73,7 +73,12 @@ export default function JobQueue({ botId, limit = 20 }: JobQueueProps) {
             <tbody>
               {jobs.map((job) => (
                 <tr key={job.id}>
-                  <td className="text-secondary">{job.bot?.name || job.bot_id.slice(0, 8)}</td>
+                  <td className="text-secondary">
+                    {(job as unknown as Record<string, unknown>)._source === "sybil" && (
+                      <span style={{ color: "var(--sys-warning)", fontSize: "0.6rem", marginRight: "0.3rem" }}>[SYBIL]</span>
+                    )}
+                    {job.bot?.name || job.bot_id.slice(0, 8)}
+                  </td>
                   <td style={{ color: "var(--sys-accent)" }}>{job.action_type}</td>
                   <td>
                     <span className={`badge ${statusBadge[job.status]} badge-pill dc-badge-sm`}>

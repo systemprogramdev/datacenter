@@ -96,29 +96,29 @@ class GenerateRequest(BaseModel):
 # --- Avatar styles ---
 
 AVATAR_STYLES = [
-    "abstract geometric portrait, vibrant colors, digital art",
-    "anime-style character avatar, colorful, expressive",
-    "pixel art character portrait, retro gaming style",
-    "cyberpunk character portrait, neon glow, dark background",
-    "watercolor portrait, soft colors, artistic",
-    "low-poly 3d character portrait, colorful geometric",
-    "graffiti style portrait, urban art, spray paint",
-    "minimalist line art portrait, clean, modern",
-    "vaporwave aesthetic portrait, pink and blue, retro",
-    "glitch art portrait, digital distortion, colorful",
+    "portrait photo of a young person, natural lighting, casual, looking at camera, shallow depth of field",
+    "professional headshot, studio lighting, neutral background, confident expression, sharp focus",
+    "candid selfie of a person outdoors, golden hour, warm tones, natural smile",
+    "portrait of a person in a coffee shop, soft ambient lighting, bokeh background",
+    "close-up portrait, dramatic side lighting, moody atmosphere, sharp details",
+    "casual portrait photo, urban street background, natural daylight, relaxed pose",
+    "portrait of a person at sunset, warm orange light, silhouette edges, peaceful expression",
+    "indoor portrait, window light, soft shadows, clean modern room background",
+    "portrait photo of a person, overcast day, muted tones, thoughtful expression, natural skin",
+    "headshot portrait, ring light, clean background, friendly expression, high detail",
 ]
 
 BANNER_STYLES = [
-    "abstract gradient waves, vibrant colors, wide format",
-    "cyberpunk cityscape panorama, neon lights, dark",
-    "geometric pattern, colorful triangles, modern design",
-    "space nebula panorama, stars, cosmic colors",
-    "glitch art wide banner, digital distortion, vaporwave",
-    "abstract fluid art, marble effect, colorful",
-    "retro synthwave landscape, sunset, grid, neon",
-    "minimalist abstract shapes, pastel colors, clean",
-    "graffiti wall panorama, urban, colorful spray paint",
-    "digital circuit board pattern, tech, glowing lines",
+    "aerial photograph of a city skyline at golden hour, warm light, wide panoramic",
+    "landscape photograph of mountains and lake, moody clouds, cinematic wide shot",
+    "urban street photography, rain reflections, neon signs, night, wide format",
+    "ocean waves crashing on rocky coast, dramatic sky, panoramic photograph",
+    "dense forest canopy from above, misty morning, green tones, wide shot",
+    "desert highway stretching to horizon, sunset, golden light, panoramic",
+    "rooftop view of city at night, bokeh lights, wide angle photograph",
+    "autumn forest path, golden leaves, soft light filtering through trees, wide",
+    "beach at sunrise, calm water, pastel sky, minimal and serene, panoramic",
+    "snow-covered mountain range, blue hour, crisp detail, cinematic wide shot",
 ]
 
 
@@ -134,7 +134,7 @@ async def generate_avatar(req: GenerateRequest):
         load_model()
 
         style = req.style or random.choice(AVATAR_STYLES)
-        prompt = f"{style}, profile picture, high quality"
+        prompt = f"{style}, photorealistic, 8k, detailed skin texture, DSLR photograph"
         if req.name:
             # Don't put the name literally in the prompt, use it as seed variation
             seed = hash(req.name) % (2**32)
@@ -174,7 +174,7 @@ async def generate_banner(req: GenerateRequest):
         load_model()
 
         style = req.style or random.choice(BANNER_STYLES)
-        prompt = f"{style}, wide banner, panoramic"
+        prompt = f"{style}, photorealistic, 8k, DSLR photograph, sharp detail"
         if req.name:
             seed = hash(req.name + "_banner") % (2**32)
         else:

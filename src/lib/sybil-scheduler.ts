@@ -69,6 +69,7 @@ class SybilScheduler {
       // Run all phases
       await this.dailyProduction(servers as SybilServer[]);
       await this.deployPendingSybils(servers as SybilServer[]);
+      await this.repairMissingImages(servers as SybilServer[]);
       await this.checkOwnerPosts(servers as SybilServer[]);
       await this.processSybilJobs();
       await this.healthCheckSybils(servers as SybilServer[]);
@@ -291,6 +292,130 @@ class SybilScheduler {
         .from("sybil_bots")
         .update({ deploy_started_at: null })
         .eq("id", sybil.id);
+    }
+  }
+
+  /**
+   * Phase 2b: Repair deployed sybils missing avatar or banner.
+   * Retries image generation + upload + spitr profile update.
+   * Processes one sybil per tick to avoid overloading the image service.
+   */
+  private async repairMissingImages(servers: SybilServer[]) {
+    const serverIds = servers.map((s) => s.id);
+
+    // Find deployed sybils with missing avatar OR banner
+    const { data: broken } = await supabase
+      .from("sybil_bots")
+      .select("*, server:sybil_servers(owner_user_id)")
+      .in("server_id", serverIds)
+      .eq("is_deployed", true)
+      .eq("is_alive", true)
+      .not("user_id", "is", null)
+      .or("avatar_url.is.null,banner_url.is.null")
+      .order("deployed_at", { ascending: true })
+      .limit(1);
+
+    if (!broken || broken.length === 0) return;
+
+    const sybil = broken[0];
+    const userId = sybil.user_id!;
+    const missingAvatar = !sybil.avatar_url;
+    const missingBanner = !sybil.banner_url;
+
+    console.log(
+      `[SybilScheduler] Repairing images for "${sybil.name}" (${userId}): avatar=${missingAvatar ? "MISSING" : "ok"}, banner=${missingBanner ? "MISSING" : "ok"}`
+    );
+
+    const fs = await import("fs/promises");
+    let avatarUrl: string | null = sybil.avatar_url;
+    let bannerUrl: string | null = sybil.banner_url;
+
+    // Retry avatar if missing
+    if (missingAvatar) {
+      try {
+        const avatarRes = await fetch(`${SYBIL_IMAGE_URL}/generate-avatar`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: sybil.name + "_" + sybil.id }),
+        });
+        if (avatarRes.ok) {
+          const avatarData = await avatarRes.json();
+          const avatarPath = avatarData.path || avatarData.file_path;
+          if (avatarPath) {
+            const imageBuffer = await fs.readFile(avatarPath);
+            avatarUrl = await spitrApi.uploadSybilImage(
+              new Uint8Array(imageBuffer),
+              `sybil_avatar_${sybil.id}.png`,
+              userId,
+              "avatar"
+            );
+            console.log(`[SybilScheduler] Avatar repaired for "${sybil.name}": ${avatarUrl}`);
+          }
+        } else {
+          console.warn(`[SybilScheduler] Avatar repair gen failed HTTP ${avatarRes.status}`);
+        }
+      } catch (err) {
+        console.error(`[SybilScheduler] Avatar repair failed for "${sybil.name}":`, err);
+      }
+    }
+
+    // Retry banner if missing
+    if (missingBanner) {
+      try {
+        const bannerRes = await fetch(`${SYBIL_IMAGE_URL}/generate-banner`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: sybil.name + "_" + sybil.id }),
+        });
+        if (bannerRes.ok) {
+          const bannerData = await bannerRes.json();
+          const bannerPath = bannerData.path || bannerData.file_path;
+          if (bannerPath) {
+            const imageBuffer = await fs.readFile(bannerPath);
+            bannerUrl = await spitrApi.uploadSybilImage(
+              new Uint8Array(imageBuffer),
+              `sybil_banner_${sybil.id}.png`,
+              userId,
+              "banner"
+            );
+            console.log(`[SybilScheduler] Banner repaired for "${sybil.name}": ${bannerUrl}`);
+          }
+        } else {
+          console.warn(`[SybilScheduler] Banner repair gen failed HTTP ${bannerRes.status}`);
+        }
+      } catch (err) {
+        console.error(`[SybilScheduler] Banner repair failed for "${sybil.name}":`, err);
+      }
+    }
+
+    // Update spitr profile if we got new images
+    const newAvatar = missingAvatar && avatarUrl;
+    const newBanner = missingBanner && bannerUrl;
+    if (newAvatar || newBanner) {
+      try {
+        const profileUpdates: { avatar_url?: string; banner_url?: string } = {};
+        if (newAvatar) profileUpdates.avatar_url = avatarUrl!;
+        if (newBanner) profileUpdates.banner_url = bannerUrl!;
+        await spitrApi.updateSybilProfile(userId, profileUpdates);
+        console.log(`[SybilScheduler] Profile repaired for "${sybil.name}"`);
+      } catch (err) {
+        console.error(`[SybilScheduler] Profile repair update failed for "${sybil.name}":`, err);
+      }
+    }
+
+    // Update local DB with whatever we got
+    const dbUpdate: Record<string, unknown> = {};
+    if (missingAvatar && avatarUrl) dbUpdate.avatar_url = avatarUrl;
+    if (missingBanner && bannerUrl) dbUpdate.banner_url = bannerUrl;
+
+    if (Object.keys(dbUpdate).length > 0) {
+      await supabase.from("sybil_bots").update(dbUpdate).eq("id", sybil.id);
+      emitEvent("sybil:image_repaired", {
+        sybilId: sybil.id,
+        name: sybil.name,
+        repairedAvatar: !!dbUpdate.avatar_url,
+        repairedBanner: !!dbUpdate.banner_url,
+      });
     }
   }
 

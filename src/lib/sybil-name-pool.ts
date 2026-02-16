@@ -2,37 +2,20 @@ import { supabase } from "./supabase";
 import { ollama } from "./ollama";
 
 /**
- * Ensure the sybil_name_pool table exists and sybil_bots has unique constraints.
- * Called once on first use — idempotent.
+ * Verify the sybil_name_pool table is accessible.
+ * Table must be created via Supabase migration — see migration SQL.
  */
 let tableReady = false;
 async function ensureTable() {
   if (tableReady) return;
 
-  const { error } = await supabase.rpc("exec_sql", {
-    sql: `
-      CREATE TABLE IF NOT EXISTS sybil_name_pool (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        name TEXT NOT NULL UNIQUE,
-        handle TEXT NOT NULL UNIQUE,
-        claimed_by UUID,
-        created_at TIMESTAMPTZ DEFAULT now()
-      );
-      CREATE INDEX IF NOT EXISTS idx_sybil_name_pool_unclaimed
-        ON sybil_name_pool (created_at) WHERE claimed_by IS NULL;
-
-      -- Add unique constraints to sybil_bots to prevent duplicates at DB level
-      DO $$ BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sybil_bots_handle_key') THEN
-          ALTER TABLE sybil_bots ADD CONSTRAINT sybil_bots_handle_key UNIQUE (handle);
-        END IF;
-      END $$;
-    `,
-  });
+  const { error } = await supabase
+    .from("sybil_name_pool")
+    .select("id", { count: "exact", head: true });
 
   if (error) {
-    console.warn("[NamePool] ensureTable RPC error (may need exec_sql function):", error.message);
-    // Table might already exist from manual creation — continue anyway
+    console.error("[NamePool] Table sybil_name_pool not found — run the migration first:", error.message);
+    return;
   }
 
   tableReady = true;
@@ -118,13 +101,12 @@ export async function refillPool(count = 20): Promise<number> {
 
   for (let i = 0; i < count; i++) {
     try {
-      const prompt = `Generate a realistic social media user profile. The user is on a Twitter-like platform called SPITr.
+      const prompt = `Generate a realistic person's social media profile. This should look like a real human being on Twitter.
 Return JSON with exactly two fields:
-- "name": a display name (1-3 words, can be a real-sounding name or internet alias)
-- "handle": a username (lowercase, no spaces, no @, 3-15 chars, may include underscores or numbers)
+- "name": a realistic full name (first + last). Use diverse ethnicities and backgrounds. Examples: Marcus Thompson, Priya Sharma, Emily Rodriguez, James O'Brien, Yuki Tanaka, Aaliyah Jackson, Devon Mitchell, Sofia Reyes
+- "handle": a realistic username based on the name (lowercase, no spaces, no @, 3-15 chars). Should look like something a real person would pick — use parts of their name, maybe add a number. Examples: marcust94, priya_sharma, emrodriguez, jamesobrien7, yukitanaka, aaliyah_j, devmitch, sofiareyes22
 
-Be creative and varied. Examples of good handles: xdarkknightx, sarah_codes, memequeen99, trade_guru, anon_whale
-Examples of good names: Dark Knight, Sarah Chen, Meme Queen, TradeGuru, Anonymous Whale
+Do NOT use internet slang, memes, or edgy aliases. These should pass as real people.
 
 Return ONLY the JSON object, nothing else.`;
 
