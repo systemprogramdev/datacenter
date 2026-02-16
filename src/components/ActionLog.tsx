@@ -48,6 +48,9 @@ export default function ActionLog({ botId, limit = 50 }: ActionLogProps) {
               <span style={{ color: log.status === "completed" ? "var(--sys-success)" : "var(--sys-danger)" }}>
                 [{log.status.toUpperCase()}]
               </span>
+              {(log as unknown as Record<string, unknown>)._source === "sybil" && (
+                <span style={{ color: "var(--sys-warning)", fontSize: "0.6rem" }}>[SYBIL]</span>
+              )}
               <span className="text-secondary">{log.bot?.name || log.bot_id.slice(0, 8)}</span>
               <span style={{ color: "var(--sys-accent)" }}>{log.action_type}</span>
               {log.error && (

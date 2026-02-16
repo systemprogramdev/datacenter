@@ -1,14 +1,31 @@
 import { ollama } from "./ollama";
 import { supabase } from "./supabase";
+import { claimName } from "./sybil-name-pool";
 
 const RESPONSE_CACHE_THRESHOLD = 5; // regenerate batch when fewer than this remain unused
 
 /**
  * Generate a realistic social media name + handle via Ollama.
+ * Checks sybil_bots table for uniqueness, retries up to 3 times.
  * Returns { name, handle } — handle is lowercase, no @.
  */
-export async function generateName(): Promise<{ name: string; handle: string }> {
-  const prompt = `Generate a realistic social media user profile. The user is on a Twitter-like platform called SPITr.
+export async function generateName(existingNames?: Set<string>): Promise<{ name: string; handle: string }> {
+  // Try claiming from pre-generated pool first (fast, no Ollama call)
+  try {
+    const poolName = await claimName();
+    if (poolName) {
+      console.log(`[SybilPlanner] Claimed name from pool: "${poolName.name}" (@${poolName.handle})`);
+      return poolName;
+    }
+  } catch (err) {
+    console.warn("[SybilPlanner] Pool claim failed, falling back to Ollama:", err);
+  }
+
+  // Fallback: generate inline via Ollama (original logic)
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const prompt = `Generate a realistic social media user profile. The user is on a Twitter-like platform called SPITr.
 Return JSON with exactly two fields:
 - "name": a display name (1-3 words, can be a real-sounding name or internet alias)
 - "handle": a username (lowercase, no spaces, no @, 3-15 chars, may include underscores or numbers)
@@ -18,18 +35,43 @@ Examples of good names: Dark Knight, Sarah Chen, Meme Queen, TradeGuru, Anonymou
 
 Return ONLY the JSON object, nothing else.`;
 
-  const result = await ollama.generateJSON<{ name: string; handle: string }>(prompt, 0.9);
+    const result = await ollama.generateJSON<{ name: string; handle: string }>(prompt, 0.9);
 
-  // Sanitize handle
-  let handle = (result.handle || "sybil_user")
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "")
-    .slice(0, 15);
-  if (handle.length < 3) handle = `sybil_${Math.floor(Math.random() * 9999)}`;
+    // Sanitize handle
+    let handle = (result.handle || "sybil_user")
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, "")
+      .slice(0, 15);
+    if (handle.length < 3) handle = `sybil_${Math.floor(Math.random() * 9999)}`;
 
-  const name = (result.name || handle).slice(0, 50);
+    const name = (result.name || handle).slice(0, 50);
 
-  return { name, handle };
+    // Check in-batch duplicates
+    if (existingNames && (existingNames.has(name) || existingNames.has(handle))) {
+      continue;
+    }
+
+    // Check DB duplicates
+    const { count: nameCount } = await supabase
+      .from("sybil_bots")
+      .select("*", { count: "exact", head: true })
+      .eq("name", name);
+
+    const { count: handleCount } = await supabase
+      .from("sybil_bots")
+      .select("*", { count: "exact", head: true })
+      .eq("handle", handle);
+
+    if ((nameCount || 0) > 0 || (handleCount || 0) > 0) {
+      continue;
+    }
+
+    return { name, handle };
+  }
+
+  // Fallback: guaranteed unique with timestamp
+  const ts = Date.now();
+  return { name: `Sybil_${ts}`, handle: `sybil_${ts}` };
 }
 
 /**

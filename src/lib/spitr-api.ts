@@ -626,17 +626,25 @@ class SpitrApiClient {
     }));
   }
 
-  async uploadSybilImage(imageBuffer: Uint8Array, filename: string): Promise<string> {
+  async uploadSybilImage(
+    imageBuffer: Uint8Array,
+    filename: string,
+    userId?: string,
+    imageType?: "avatar" | "banner"
+  ): Promise<string> {
     if (this.dryRun) {
       console.log(`[DRY RUN] uploadSybilImage: ${filename}`);
       return `https://example.com/dry-run/${filename}`;
     }
 
     const url = `${this.baseUrl}/api/bot/sybil/upload-image`;
-    console.log(`[SpitrAPI] POST ${url} (upload: ${filename})`);
+    console.log(`[SpitrAPI] POST ${url} (upload: ${filename}, user: ${userId || "none"}, type: ${imageType || "none"})`);
 
     const formData = new FormData();
-    formData.append("file", new Blob([imageBuffer as unknown as BlobPart]), filename);
+    const arrayBuf = imageBuffer.buffer.slice(imageBuffer.byteOffset, imageBuffer.byteOffset + imageBuffer.byteLength) as ArrayBuffer;
+    formData.append("file", new File([arrayBuf], filename, { type: "image/png" }));
+    if (userId) formData.append("user_id", userId);
+    if (imageType) formData.append("type", imageType);
 
     const res = await fetch(url, {
       method: "POST",
@@ -652,7 +660,37 @@ class SpitrApiClient {
     }
 
     const data = await res.json();
-    return String(data.url || data.image_url || "");
+    const imageUrl = data.url || data.image_url || "";
+    if (!imageUrl) {
+      throw new Error("Spitr upload-image returned no URL in response");
+    }
+    return String(imageUrl);
+  }
+
+  async updateSybilProfile(
+    userId: string,
+    updates: { avatar_url?: string; banner_url?: string }
+  ): Promise<void> {
+    if (this.dryRun) {
+      console.log(`[DRY RUN] updateSybilProfile for ${userId}:`, updates);
+      return;
+    }
+
+    const url = `${this.baseUrl}/api/bot/sybil/update-profile`;
+    console.log(`[SpitrAPI] POST ${url} (update profile for user: ${userId.slice(0, 8)}...)`);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Datacenter-Key": this.apiKey,
+      },
+      body: JSON.stringify({ user_id: userId, ...updates }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Spitr sybil update-profile error ${res.status}: ${text}`);
+    }
   }
 
   async purchaseSybilServer(ownerUserId: string): Promise<{ success: boolean }> {

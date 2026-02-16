@@ -319,6 +319,10 @@ export interface DashboardStats {
   schedulerRunning: boolean;
   ollamaConnected: boolean;
   totalTokens: number;
+  sybilServers: number;
+  sybilBotsAlive: number;
+  sybilJobsToday: number;
+  sybilJobsFailed: number;
 }
 
 // --- SSE Event Types ---

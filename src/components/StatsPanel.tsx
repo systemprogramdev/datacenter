@@ -16,6 +16,8 @@ export default function StatsPanel() {
     { label: "FAILED", value: stats.failedJobsToday, color: "var(--sys-danger)" },
     { label: "PENDING", value: stats.pendingJobs, color: "var(--sys-warning)" },
     { label: "TOKENS", value: stats.totalTokens.toLocaleString(), color: "var(--sys-accent)" },
+    { label: "SYBIL BOTS", value: stats.sybilBotsAlive, color: "var(--sys-accent)" },
+    { label: "SYBIL JOBS", value: stats.sybilJobsToday, color: "var(--sys-info)" },
   ];
 
   return (

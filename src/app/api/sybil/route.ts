@@ -102,18 +102,21 @@ export async function POST(req: Request) {
   }
 
   // Generate 10 initial sybil names
+  const usedNames = new Set<string>();
   const sybils: { server_id: string; name: string; handle: string }[] = [];
   for (let i = 0; i < 10; i++) {
     try {
-      const { name, handle } = await generateName();
+      const { name, handle } = await generateName(usedNames);
+      usedNames.add(name);
+      usedNames.add(handle);
       sybils.push({ server_id: server.id, name, handle });
     } catch (err) {
       console.error(`[SybilAPI] Failed to generate sybil name ${i}:`, err);
-      // Generate a fallback name
+      const ts = Date.now();
       sybils.push({
         server_id: server.id,
-        name: `Sybil ${i + 1}`,
-        handle: `sybil_${Date.now()}_${i}`,
+        name: `Sybil_${ts}_${i}`,
+        handle: `sybil_${ts}_${i}`,
       });
     }
   }

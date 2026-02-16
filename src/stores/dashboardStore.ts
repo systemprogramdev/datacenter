@@ -28,6 +28,10 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
     schedulerRunning: false,
     ollamaConnected: false,
     totalTokens: 0,
+    sybilServers: 0,
+    sybilBotsAlive: 0,
+    sybilJobsToday: 0,
+    sybilJobsFailed: 0,
   },
   schedulerState: {
     running: false,

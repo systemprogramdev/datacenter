@@ -7,6 +7,7 @@ import {
   getNextCachedResponse,
   cleanupUsedResponses,
 } from "./sybil-planner";
+import { getPoolSize, refillPool } from "./sybil-name-pool";
 import type { SybilBot, SybilServer } from "./types";
 
 const SYBIL_IMAGE_URL = process.env.SYBIL_IMAGE_URL || "http://127.0.0.1:8100";
@@ -72,6 +73,7 @@ class SybilScheduler {
       await this.processSybilJobs();
       await this.healthCheckSybils(servers as SybilServer[]);
       await cleanupUsedResponses();
+      await this.refillNamePool();
     } catch (err) {
       console.error("[SybilScheduler] Tick error:", err);
     } finally {
@@ -107,17 +109,30 @@ class SybilScheduler {
         if ((aliveCount || 0) >= server.max_sybils) continue;
 
         // Generate a name and create the sybil (undeployed)
-        const { name, handle } = await generateName();
+        // Retry up to 3 times in case of handle conflicts
+        let created = false;
+        for (let attempt = 0; attempt < 3 && !created; attempt++) {
+          const { name, handle } = await generateName();
 
-        await supabase.from("sybil_bots").insert({
-          server_id: server.id,
-          name,
-          handle,
-          is_alive: true,
-          is_deployed: false,
-        });
+          const { error: insertErr } = await supabase.from("sybil_bots").insert({
+            server_id: server.id,
+            name,
+            handle,
+            is_alive: true,
+            is_deployed: false,
+          });
 
-        console.log(`[SybilScheduler] Created sybil "${name}" (@${handle}) for server ${server.id.slice(0, 8)}`);
+          if (insertErr) {
+            if (insertErr.code === "23505") {
+              console.warn(`[SybilScheduler] Duplicate handle "${handle}", retrying...`);
+              continue;
+            }
+            throw insertErr;
+          }
+
+          created = true;
+          console.log(`[SybilScheduler] Created sybil "${name}" (@${handle}) for server ${server.id.slice(0, 8)}`);
+        }
       } catch (err) {
         console.error(`[SybilScheduler] Daily production failed for server ${server.id.slice(0, 8)}:`, err);
       }
@@ -131,10 +146,14 @@ class SybilScheduler {
   private async deployPendingSybils(servers: SybilServer[]) {
     const serverIds = servers.map((s) => s.id);
 
-    // Find the oldest undeployed sybil across all active servers
-    const { data: pending } = await supabase
+    // Atomic claim: update deploy_started_at and return the row in one query
+    // This prevents race conditions where two ticks grab the same sybil
+    const now = new Date().toISOString();
+
+    // First find a candidate
+    const { data: candidates } = await supabase
       .from("sybil_bots")
-      .select("*, server:sybil_servers(owner_user_id)")
+      .select("id")
       .in("server_id", serverIds)
       .eq("is_deployed", false)
       .eq("is_alive", true)
@@ -142,93 +161,129 @@ class SybilScheduler {
       .order("created_at", { ascending: true })
       .limit(1);
 
-    if (!pending || pending.length === 0) return;
+    if (!candidates || candidates.length === 0) return;
 
-    const sybil = pending[0];
+    // Atomic claim: only succeeds if deploy_started_at is still null
+    const { data: claimed } = await supabase
+      .from("sybil_bots")
+      .update({ deploy_started_at: now })
+      .eq("id", candidates[0].id)
+      .is("deploy_started_at", null)
+      .select("*, server:sybil_servers(owner_user_id)");
+
+    if (!claimed || claimed.length === 0) {
+      console.log("[SybilScheduler] Deploy claim race lost, skipping");
+      return;
+    }
+
+    const sybil = claimed[0];
     const ownerUserId = (sybil.server as unknown as { owner_user_id: string })?.owner_user_id;
     if (!ownerUserId) return;
-
-    // Mark deploy started
-    await supabase
-      .from("sybil_bots")
-      .update({ deploy_started_at: new Date().toISOString() })
-      .eq("id", sybil.id);
 
     try {
       console.log(`[SybilScheduler] Deploying sybil "${sybil.name}" (@${sybil.handle})...`);
 
-      // Generate avatar
+      // Step 1: Create the spitr account FIRST (no images yet)
+      const result = await spitrApi.createSybilAccount(
+        ownerUserId,
+        sybil.name,
+        sybil.handle,
+        null,
+        null
+      );
+
+      const userId = result.user_id;
+      console.log(`[SybilScheduler] Account created: ${userId}`);
+
+      // Step 2: Generate + upload images AFTER account exists, with user_id
       let avatarUrl: string | null = null;
       let bannerUrl: string | null = null;
+      const fs = await import("fs/promises");
 
       try {
+        console.log(`[SybilScheduler] Generating avatar for "${sybil.name}"...`);
         const avatarRes = await fetch(`${SYBIL_IMAGE_URL}/generate-avatar`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: sybil.name }),
+          body: JSON.stringify({ name: sybil.name + "_" + sybil.id }),
         });
         if (avatarRes.ok) {
           const avatarData = await avatarRes.json();
           const avatarPath = avatarData.path || avatarData.file_path;
           if (avatarPath) {
-            // Read the generated file and upload to spitr
-            const fs = await import("fs/promises");
             const imageBuffer = await fs.readFile(avatarPath);
+            console.log(`[SybilScheduler] Uploading avatar (${imageBuffer.length} bytes) for user ${userId}...`);
             avatarUrl = await spitrApi.uploadSybilImage(
               new Uint8Array(imageBuffer),
-              `sybil_avatar_${sybil.id}.png`
+              `sybil_avatar_${sybil.id}.png`,
+              userId,
+              "avatar"
             );
+            console.log(`[SybilScheduler] Avatar uploaded: ${avatarUrl}`);
           }
+        } else {
+          console.warn(`[SybilScheduler] Avatar generation HTTP ${avatarRes.status}: ${await avatarRes.text()}`);
         }
       } catch (imgErr) {
-        console.warn(`[SybilScheduler] Avatar generation failed for ${sybil.name}, continuing without:`, imgErr);
+        console.error(`[SybilScheduler] Avatar failed for ${sybil.name}:`, imgErr);
       }
 
       try {
+        console.log(`[SybilScheduler] Generating banner for "${sybil.name}"...`);
         const bannerRes = await fetch(`${SYBIL_IMAGE_URL}/generate-banner`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: sybil.name }),
+          body: JSON.stringify({ name: sybil.name + "_" + sybil.id }),
         });
         if (bannerRes.ok) {
           const bannerData = await bannerRes.json();
           const bannerPath = bannerData.path || bannerData.file_path;
           if (bannerPath) {
-            const fs = await import("fs/promises");
             const imageBuffer = await fs.readFile(bannerPath);
+            console.log(`[SybilScheduler] Uploading banner (${imageBuffer.length} bytes) for user ${userId}...`);
             bannerUrl = await spitrApi.uploadSybilImage(
               new Uint8Array(imageBuffer),
-              `sybil_banner_${sybil.id}.png`
+              `sybil_banner_${sybil.id}.png`,
+              userId,
+              "banner"
             );
+            console.log(`[SybilScheduler] Banner uploaded: ${bannerUrl}`);
           }
+        } else {
+          console.warn(`[SybilScheduler] Banner generation HTTP ${bannerRes.status}: ${await bannerRes.text()}`);
         }
       } catch (imgErr) {
-        console.warn(`[SybilScheduler] Banner generation failed for ${sybil.name}, continuing without:`, imgErr);
+        console.error(`[SybilScheduler] Banner failed for ${sybil.name}:`, imgErr);
       }
 
-      // Create the spitr account
-      const result = await spitrApi.createSybilAccount(
-        ownerUserId,
-        sybil.name,
-        sybil.handle,
-        avatarUrl,
-        bannerUrl
-      );
+      // Step 3: Update spitr profile with image URLs
+      if (avatarUrl || bannerUrl) {
+        try {
+          const profileUpdates: { avatar_url?: string; banner_url?: string } = {};
+          if (avatarUrl) profileUpdates.avatar_url = avatarUrl;
+          if (bannerUrl) profileUpdates.banner_url = bannerUrl;
+          await spitrApi.updateSybilProfile(userId, profileUpdates);
+          console.log(`[SybilScheduler] Profile updated for ${userId}: avatar=${!!avatarUrl}, banner=${!!bannerUrl}`);
+        } catch (profileErr) {
+          console.error(`[SybilScheduler] Profile update failed for ${sybil.name}:`, profileErr);
+          // Non-fatal — sybil still gets deployed, just without images on spitr side
+        }
+      }
 
       // Mark as deployed
       await supabase
         .from("sybil_bots")
         .update({
-          user_id: result.user_id,
-          avatar_url: avatarUrl,
-          banner_url: bannerUrl,
+          user_id: userId,
+          avatar_url: avatarUrl || null,
+          banner_url: bannerUrl || null,
           is_deployed: true,
           deployed_at: new Date().toISOString(),
         })
         .eq("id", sybil.id);
 
-      console.log(`[SybilScheduler] Deployed sybil "${sybil.name}" → user_id: ${result.user_id}`);
-      emitEvent("sybil:deployed", { sybilId: sybil.id, name: sybil.name, userId: result.user_id });
+      console.log(`[SybilScheduler] Deployed sybil "${sybil.name}" → user_id: ${userId}, avatar: ${!!avatarUrl}, banner: ${!!bannerUrl}`);
+      emitEvent("sybil:deployed", { sybilId: sybil.id, name: sybil.name, userId });
     } catch (err) {
       console.error(`[SybilScheduler] Deploy failed for sybil ${sybil.name}:`, err);
       // Reset deploy_started_at so it can be retried next tick
@@ -449,6 +504,24 @@ class SybilScheduler {
 
     if (processed > 0) {
       console.log(`[SybilScheduler] Processed ${processed} sybil jobs this tick`);
+    }
+  }
+
+  /**
+   * Refill the name pool if running low.
+   */
+  private async refillNamePool() {
+    try {
+      const { total, available } = await getPoolSize();
+      console.log(`[SybilScheduler] Name pool: ${available}/${total} available`);
+
+      if (available < 20) {
+        console.log(`[SybilScheduler] Pool low (${available}), refilling...`);
+        const added = await refillPool(30);
+        console.log(`[SybilScheduler] Pool refilled with ${added} names`);
+      }
+    } catch (err) {
+      console.warn("[SybilScheduler] Name pool refill failed:", err);
     }
   }
 

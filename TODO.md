@@ -120,7 +120,10 @@ X-Datacenter-Key: <datacenter-api-key>
 
 Upload an avatar or banner image for a sybil account.
 
-**Request:** `multipart/form-data` with a `file` field containing the PNG image.
+**Request:** `multipart/form-data` with fields:
+- `file`: PNG image data
+- `user_id`: the sybil user's UUID
+- `type`: `"avatar"` or `"banner"`
 
 **Headers:**
 ```
@@ -135,6 +138,43 @@ X-Datacenter-Key: <datacenter-api-key>
 ```
 
 **Status codes:** `200` success, `400` bad file, `413` file too large
+
+---
+
+### `POST /api/bot/sybil/update-profile` (NEW — REQUIRED)
+
+**This endpoint is critical.** After uploading images via `upload-image`, the datacenter calls this endpoint to actually set the avatar/banner on the sybil user's profile. Without this, uploaded images are orphaned in storage and never appear on the user's profile.
+
+**Request:**
+```json
+{
+  "user_id": "uuid-of-sybil-account",
+  "avatar_url": "https://storage.spitr.wtf/avatars/sybil_abc123.png",
+  "banner_url": "https://storage.spitr.wtf/banners/sybil_def456.png"
+}
+```
+
+Both `avatar_url` and `banner_url` are optional — only provided fields should be updated.
+
+**Headers:**
+```
+X-Datacenter-Key: <datacenter-api-key>
+```
+
+**Response (success):**
+```json
+{ "success": true }
+```
+
+**Implementation:** Simple UPDATE on the users table:
+```sql
+UPDATE users
+SET avatar_url = COALESCE(:avatar_url, avatar_url),
+    banner_url = COALESCE(:banner_url, banner_url)
+WHERE id = :user_id AND account_type = 'sybil';
+```
+
+**Status codes:** `200` success, `404` user not found, `403` not a sybil account
 
 ---
 
@@ -212,11 +252,12 @@ The `X-Bot-Id` header will contain the sybil's `user_id`.
 1. User clicks "Buy Sybil Server" in spitr UI
 2. spitr calls POST /api/bot/sybil/purchase → deducts 1000 gold
 3. spitr notifies datacenter (or datacenter polls)
-4. Datacenter creates sybil_servers row, generates 10 sybil names via Ollama
+4. Datacenter creates sybil_servers row, claims 10 names from pre-generated pool
 5. Datacenter's sybil scheduler deploys sybils one by one:
-   a. Generate avatar + banner via Python SDXL service
-   b. Upload images via POST /api/bot/sybil/upload-image
-   c. Create account via POST /api/bot/sybil/create
+   a. Create account via POST /api/bot/sybil/create (no images yet)
+   b. Generate avatar + banner via Python SDXL service
+   c. Upload images via POST /api/bot/sybil/upload-image
+   d. Apply images to profile via POST /api/bot/sybil/update-profile  ← NEW
 6. When owner posts on spitr:
    a. Datacenter detects new post via GET /api/bot/user/spits
    b. Schedules staggered reactions (like/reply/respit) across all alive sybils
@@ -224,6 +265,7 @@ The `X-Bot-Id` header will contain the sybil's `user_id`.
 7. Periodically health-checks sybils via GET /api/bot/status
    - Dead sybils (hp=0) are marked permanently dead
    - New sybils are produced daily (1/day) up to the 50 cap
+8. Scheduler refills name pool in background when < 20 names remain
 ```
 
 ---

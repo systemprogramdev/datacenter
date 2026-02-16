@@ -67,6 +67,72 @@ export async function GET(
   });
 }
 
+export async function PATCH(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+
+  const { data: server } = await supabase
+    .from("sybil_servers")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (!server) {
+    return NextResponse.json(
+      { success: false, error: "Sybil server not found" },
+      { status: 404 }
+    );
+  }
+
+  if (server.status !== "provisioning") {
+    return NextResponse.json(
+      { success: false, error: "Server is not in provisioning state" },
+      { status: 400 }
+    );
+  }
+
+  // Check if sybils already exist
+  const { count } = await supabase
+    .from("sybil_bots")
+    .select("*", { count: "exact", head: true })
+    .eq("server_id", id);
+
+  // Seed initial sybils with fallback names if none exist
+  if ((count || 0) === 0) {
+    const { generateName } = await import("@/lib/sybil-planner");
+    const usedNames = new Set<string>();
+    const sybils: { server_id: string; name: string; handle: string }[] = [];
+    for (let i = 0; i < 10; i++) {
+      try {
+        const { name, handle } = await generateName(usedNames);
+        usedNames.add(name);
+        usedNames.add(handle);
+        sybils.push({ server_id: id, name, handle });
+      } catch {
+        const ts = Date.now();
+        sybils.push({
+          server_id: id,
+          name: `Sybil_${ts}_${i}`,
+          handle: `sybil_${ts}_${i}`,
+        });
+      }
+    }
+    if (sybils.length > 0) {
+      await supabase.from("sybil_bots").insert(sybils);
+    }
+  }
+
+  // Activate
+  await supabase
+    .from("sybil_servers")
+    .update({ status: "active", updated_at: new Date().toISOString() })
+    .eq("id", id);
+
+  return NextResponse.json({ success: true, data: { status: "active" } });
+}
+
 export async function DELETE(
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
