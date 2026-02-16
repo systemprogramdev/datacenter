@@ -258,24 +258,24 @@ class SpitrApiClient {
     });
   }
 
-  async reply(botId: string, postId: string, content: string) {
+  async reply(botId: string, spitId: string, content: string) {
     return this.request("/reply", botId, {
       method: "POST",
-      body: { postId, content },
+      body: { reply_to_id: spitId, content },
     });
   }
 
-  async like(botId: string, postId: string) {
+  async like(botId: string, spitId: string) {
     return this.request("/like", botId, {
       method: "POST",
-      body: { postId },
+      body: { spit_id: spitId },
     });
   }
 
-  async respit(botId: string, postId: string) {
+  async respit(botId: string, spitId: string) {
     return this.request("/respit", botId, {
       method: "POST",
-      body: { postId },
+      body: { spit_id: spitId },
     });
   }
 
