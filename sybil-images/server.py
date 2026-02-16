@@ -5,6 +5,7 @@ Runs on port 8100, lazy-loads model on first request.
 """
 
 import os
+import time
 import uuid
 import random
 from pathlib import Path
@@ -22,6 +23,12 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # Global model reference (lazy loaded)
 pipe = None
 model_loaded = False
+
+# Uptime + generation counters
+SERVER_START_TIME = time.time()
+total_generated = 0
+avatars_generated = 0
+banners_generated = 0
 
 
 def get_device():
@@ -93,6 +100,11 @@ class GenerateRequest(BaseModel):
     style: str = ""
 
 
+class UpdateStylesRequest(BaseModel):
+    avatar_styles: list[str] | None = None
+    banner_styles: list[str] | None = None
+
+
 # --- Avatar styles ---
 
 AVATAR_STYLES = [
@@ -156,6 +168,10 @@ async def generate_avatar(req: GenerateRequest):
         filepath = OUTPUT_DIR / filename
         image.save(filepath)
 
+        global total_generated, avatars_generated
+        total_generated += 1
+        avatars_generated += 1
+
         return JSONResponse({
             "success": True,
             "path": str(filepath),
@@ -195,6 +211,10 @@ async def generate_banner(req: GenerateRequest):
         filepath = OUTPUT_DIR / filename
         image.save(filepath)
 
+        global total_generated, banners_generated
+        total_generated += 1
+        banners_generated += 1
+
         return JSONResponse({
             "success": True,
             "path": str(filepath),
@@ -211,6 +231,69 @@ async def unload():
     """Free GPU memory after batch processing."""
     unload_model()
     return {"success": True, "message": "Model unloaded"}
+
+
+@app.get("/styles")
+async def get_styles():
+    """Return current avatar and banner style prompts."""
+    return {"avatar_styles": AVATAR_STYLES, "banner_styles": BANNER_STYLES}
+
+
+@app.put("/styles")
+async def update_styles(req: UpdateStylesRequest):
+    """Update avatar and/or banner style prompts."""
+    global AVATAR_STYLES, BANNER_STYLES
+    if req.avatar_styles is not None:
+        if len(req.avatar_styles) == 0:
+            raise HTTPException(status_code=400, detail="avatar_styles cannot be empty")
+        AVATAR_STYLES = req.avatar_styles
+    if req.banner_styles is not None:
+        if len(req.banner_styles) == 0:
+            raise HTTPException(status_code=400, detail="banner_styles cannot be empty")
+        BANNER_STYLES = req.banner_styles
+    return {"success": True, "avatar_styles": len(AVATAR_STYLES), "banner_styles": len(BANNER_STYLES)}
+
+
+@app.get("/stats")
+async def get_stats():
+    """Return generation statistics and server info."""
+    # Calculate output directory size
+    dir_size = sum(f.stat().st_size for f in OUTPUT_DIR.glob("*.png")) / (1024 * 1024)
+    return {
+        "total_generated": total_generated,
+        "avatars_generated": avatars_generated,
+        "banners_generated": banners_generated,
+        "output_dir_size_mb": round(dir_size, 2),
+        "model_loaded": model_loaded,
+        "device": get_device(),
+        "uptime_seconds": round(time.time() - SERVER_START_TIME),
+    }
+
+
+@app.get("/recent")
+async def get_recent(limit: int = 20):
+    """Return recent generated files, newest first."""
+    files = sorted(OUTPUT_DIR.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
+    result = []
+    for f in files:
+        stat = f.stat()
+        file_type = "avatar" if f.name.startswith("avatar_") else "banner" if f.name.startswith("banner_") else "unknown"
+        result.append({
+            "filename": f.name,
+            "type": file_type,
+            "size_kb": round(stat.st_size / 1024, 1),
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stat.st_mtime)),
+        })
+    return {"files": result}
+
+
+@app.post("/clear-output")
+async def clear_output():
+    """Delete all PNG files from the output directory."""
+    files = list(OUTPUT_DIR.glob("*.png"))
+    for f in files:
+        f.unlink()
+    return {"success": True, "deleted": len(files)}
 
 
 if __name__ == "__main__":

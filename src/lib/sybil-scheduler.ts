@@ -17,6 +17,8 @@ const JOB_GAP_MS = 15_000; // 15s between sybil job executions
 const REACTION_BASE_DELAY = 30_000; // 30s base delay between sybil reactions
 const REACTION_JITTER = 60_000; // 60s random jitter
 const HEALTH_CHECK_BATCH = 5; // check this many sybils per tick
+const MAX_RETRIES = 3;
+const RETRY_BACKOFF = [30_000, 60_000, 120_000]; // 30s, 60s, 2m
 
 class SybilScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -67,7 +69,8 @@ class SybilScheduler {
       }
 
       // Run all phases
-      await this.dailyProduction(servers as SybilServer[]);
+      await this.cleanupDeadSybils(servers as SybilServer[]);
+      await this.replenishSybils(servers as SybilServer[]);
       await this.deployPendingSybils(servers as SybilServer[]);
       await this.repairMissingImages(servers as SybilServer[]);
       await this.checkOwnerPosts(servers as SybilServer[]);
@@ -83,22 +86,44 @@ class SybilScheduler {
   }
 
   /**
-   * Phase 1: Daily production — create one new sybil per server per day
+   * Phase 0: Delete dead sybils and their failed jobs.
+   */
+  private async cleanupDeadSybils(servers: SybilServer[]) {
+    const serverIds = servers.map((s) => s.id);
+
+    const { data: dead } = await supabase
+      .from("sybil_bots")
+      .select("id, name, server_id")
+      .in("server_id", serverIds)
+      .eq("is_alive", false);
+
+    if (!dead || dead.length === 0) return;
+
+    // Delete jobs first (FK constraint), then the bots
+    const deadIds = dead.map((d) => d.id);
+    await supabase.from("sybil_jobs").delete().in("sybil_bot_id", deadIds);
+    await supabase.from("sybil_bots").delete().in("id", deadIds);
+
+    console.log(`[SybilScheduler] Cleaned up ${dead.length} dead sybils`);
+  }
+
+  /**
+   * Phase 1: Replenish sybils — create one new sybil per server per hour
    * if alive count is below max_sybils.
    */
-  private async dailyProduction(servers: SybilServer[]) {
-    const today = new Date().toISOString().split("T")[0];
+  private async replenishSybils(servers: SybilServer[]) {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     for (const server of servers) {
       try {
-        // Check if we already created a sybil today for this server
-        const { count: createdToday } = await supabase
+        // Check if we already created a sybil in the last hour for this server
+        const { count: createdRecently } = await supabase
           .from("sybil_bots")
           .select("*", { count: "exact", head: true })
           .eq("server_id", server.id)
-          .gte("created_at", `${today}T00:00:00.000Z`);
+          .gte("created_at", oneHourAgo);
 
-        if ((createdToday || 0) > 0) continue;
+        if ((createdRecently || 0) > 0) continue;
 
         // Check alive count vs cap
         const { count: aliveCount } = await supabase
@@ -110,7 +135,6 @@ class SybilScheduler {
         if ((aliveCount || 0) >= server.max_sybils) continue;
 
         // Generate a name and create the sybil (undeployed)
-        // Retry up to 3 times in case of handle conflicts
         let created = false;
         for (let attempt = 0; attempt < 3 && !created; attempt++) {
           const { name, handle } = await generateName();
@@ -132,10 +156,10 @@ class SybilScheduler {
           }
 
           created = true;
-          console.log(`[SybilScheduler] Created sybil "${name}" (@${handle}) for server ${server.id.slice(0, 8)}`);
+          console.log(`[SybilScheduler] Replenished sybil "${name}" (@${handle}) for server ${server.id.slice(0, 8)} (alive: ${aliveCount}/${server.max_sybils})`);
         }
       } catch (err) {
-        console.error(`[SybilScheduler] Daily production failed for server ${server.id.slice(0, 8)}:`, err);
+        console.error(`[SybilScheduler] Replenish failed for server ${server.id.slice(0, 8)}:`, err);
       }
     }
   }
@@ -435,13 +459,14 @@ class SybilScheduler {
 
         console.log(`[SybilScheduler] New owner post detected for server ${server.id.slice(0, 8)}: "${latestSpit.content.slice(0, 50)}..."`);
 
-        // Get alive deployed sybils for this server
+        // Get alive deployed sybils for this server (must have a valid user_id)
         const { data: sybils } = await supabase
           .from("sybil_bots")
           .select("*")
           .eq("server_id", server.id)
           .eq("is_alive", true)
-          .eq("is_deployed", true);
+          .eq("is_deployed", true)
+          .not("user_id", "is", null);
 
         if (sybils && sybils.length > 0) {
           await this.scheduleSybilReactions(
@@ -546,7 +571,7 @@ class SybilScheduler {
 
       const { data: jobs } = await supabase
         .from("sybil_jobs")
-        .select("*, sybil_bot:sybil_bots(user_id)")
+        .select("*, sybil_bot:sybil_bots(user_id, is_alive)")
         .eq("status", "pending")
         .lte("scheduled_for", now)
         .order("scheduled_for", { ascending: true })
@@ -555,13 +580,25 @@ class SybilScheduler {
       if (!jobs || jobs.length === 0) break;
 
       const job = jobs[0];
-      const sybilUserId = (job.sybil_bot as unknown as { user_id: string | null })?.user_id;
+      const sybilBot = job.sybil_bot as unknown as { user_id: string | null; is_alive: boolean } | null;
+      const sybilUserId = sybilBot?.user_id;
+      const retryCount = (job.retry_count as number) || 0;
 
+      // Skip jobs for bots that aren't deployed yet
       if (!sybilUserId) {
-        // Sybil not yet deployed, mark as failed
         await supabase
           .from("sybil_jobs")
-          .update({ status: "failed", error: "Sybil bot not deployed", completed_at: new Date().toISOString() })
+          .update({ status: "failed", error: "Sybil bot not deployed", completed_at: now })
+          .eq("id", job.id);
+        processed++;
+        continue;
+      }
+
+      // Skip jobs for dead bots
+      if (sybilBot && !sybilBot.is_alive) {
+        await supabase
+          .from("sybil_jobs")
+          .update({ status: "failed", error: "Sybil bot is dead", completed_at: now })
           .eq("id", job.id);
         processed++;
         continue;
@@ -570,7 +607,7 @@ class SybilScheduler {
       // Mark as running
       await supabase
         .from("sybil_jobs")
-        .update({ status: "running", started_at: new Date().toISOString() })
+        .update({ status: "running", started_at: now })
         .eq("id", job.id);
 
       try {
@@ -582,7 +619,6 @@ class SybilScheduler {
             result = await spitrApi.like(sybilUserId, spitId);
             break;
           case "reply": {
-            // Get cached response
             const responseText = await getNextCachedResponse(job.server_id, spitId);
             const content = responseText || "this";
             result = await spitrApi.reply(sybilUserId, spitId, content);
@@ -607,16 +643,36 @@ class SybilScheduler {
         emitEvent("sybil:job_completed", { jobId: job.id, action: job.action_type, sybilUserId });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        await supabase
-          .from("sybil_jobs")
-          .update({
-            status: "failed",
-            completed_at: new Date().toISOString(),
-            error: errorMsg,
-          })
-          .eq("id", job.id);
 
-        emitEvent("sybil:job_failed", { jobId: job.id, action: job.action_type, error: errorMsg });
+        if (retryCount < MAX_RETRIES) {
+          // Reschedule with backoff
+          const backoff = RETRY_BACKOFF[retryCount] || 120_000;
+          const retryAt = new Date(Date.now() + backoff).toISOString();
+          await supabase
+            .from("sybil_jobs")
+            .update({
+              status: "pending",
+              retry_count: retryCount + 1,
+              scheduled_for: retryAt,
+              error: `Retry ${retryCount + 1}/${MAX_RETRIES}: ${errorMsg}`,
+            })
+            .eq("id", job.id);
+
+          console.log(`[SybilScheduler] Job ${job.id.slice(0, 8)} failed (${job.action_type}), retry ${retryCount + 1}/${MAX_RETRIES} in ${backoff / 1000}s: ${errorMsg}`);
+        } else {
+          // Max retries reached — permanent failure
+          await supabase
+            .from("sybil_jobs")
+            .update({
+              status: "failed",
+              completed_at: new Date().toISOString(),
+              error: `Failed after ${MAX_RETRIES} retries: ${errorMsg}`,
+            })
+            .eq("id", job.id);
+
+          console.log(`[SybilScheduler] Job ${job.id.slice(0, 8)} permanently failed (${job.action_type}) after ${MAX_RETRIES} retries: ${errorMsg}`);
+          emitEvent("sybil:job_failed", { jobId: job.id, action: job.action_type, error: errorMsg });
+        }
       }
 
       processed++;
@@ -633,17 +689,17 @@ class SybilScheduler {
   }
 
   /**
-   * Refill the name pool if running low.
+   * Refill the name pool — keep at least 50 names ready at all times.
    */
   private async refillNamePool() {
     try {
-      const { total, available } = await getPoolSize();
-      console.log(`[SybilScheduler] Name pool: ${available}/${total} available`);
+      const { available } = await getPoolSize();
 
-      if (available < 20) {
-        console.log(`[SybilScheduler] Pool low (${available}), refilling...`);
-        const added = await refillPool(30);
-        console.log(`[SybilScheduler] Pool refilled with ${added} names`);
+      if (available < 50) {
+        const needed = 50 - available;
+        console.log(`[SybilScheduler] Name pool low (${available}), refilling ${needed}...`);
+        const added = await refillPool(needed);
+        console.log(`[SybilScheduler] Pool refilled with ${added} names (pool now ~${available + added})`);
       }
     } catch (err) {
       console.warn("[SybilScheduler] Name pool refill failed:", err);
@@ -674,6 +730,13 @@ class SybilScheduler {
         const isDead = status.destroyed || status.hp === 0;
 
         if (isDead) {
+          // Cancel any pending jobs for this dead sybil
+          await supabase
+            .from("sybil_jobs")
+            .update({ status: "failed", error: "Sybil died" })
+            .eq("sybil_bot_id", sybil.id)
+            .eq("status", "pending");
+
           await supabase
             .from("sybil_bots")
             .update({
@@ -683,7 +746,7 @@ class SybilScheduler {
             })
             .eq("id", sybil.id);
 
-          console.log(`[SybilScheduler] Sybil "${sybil.name}" (${sybil.user_id}) died`);
+          console.log(`[SybilScheduler] Sybil "${sybil.name}" (${sybil.user_id}) died — pending jobs cancelled`);
           emitEvent("sybil:health_check", { sybilId: sybil.id, name: sybil.name, alive: false });
         } else {
           // Update HP

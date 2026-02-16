@@ -449,3 +449,42 @@ export interface SybilServerWithStats extends SybilServer {
   total_count: number;
   deployed_count: number;
 }
+
+// ============================================================
+// Image Server Types
+// ============================================================
+
+export interface ImageServerHealth {
+  status: string;
+  model_loaded: boolean;
+  device: string;
+}
+
+export interface ImageServerStats {
+  total_generated: number;
+  avatars_generated: number;
+  banners_generated: number;
+  output_dir_size_mb: number;
+  model_loaded: boolean;
+  device: string;
+  uptime_seconds: number;
+}
+
+export interface ImageServerStyles {
+  avatar_styles: string[];
+  banner_styles: string[];
+}
+
+export interface ImageServerFile {
+  filename: string;
+  type: string;
+  size_kb: number;
+  created_at: string;
+}
+
+export type ImageServerAction =
+  | "unload"
+  | "generate-test-avatar"
+  | "generate-test-banner"
+  | "restart"
+  | "clear-output";

@@ -75,77 +75,114 @@ export async function getPoolSize(): Promise<{ total: number; available: number 
   return { total: total || 0, available: available || 0 };
 }
 
+// Regions to rotate through for diversity
+const REGIONS = [
+  "East Asian (Chinese, Japanese, Korean)",
+  "South Asian (Indian, Pakistani, Bengali, Sri Lankan)",
+  "Southeast Asian (Vietnamese, Thai, Filipino, Indonesian)",
+  "West African (Nigerian, Ghanaian, Senegalese)",
+  "East African (Ethiopian, Kenyan, Somali)",
+  "North African / Middle Eastern (Egyptian, Moroccan, Lebanese, Turkish, Iranian)",
+  "Latin American (Mexican, Colombian, Brazilian, Argentine, Cuban)",
+  "Caribbean (Jamaican, Haitian, Trinidadian)",
+  "Eastern European (Russian, Polish, Ukrainian, Romanian, Czech)",
+  "Western European (British, French, German, Italian, Dutch, Spanish)",
+  "Scandinavian (Swedish, Norwegian, Danish, Finnish)",
+  "North American mixed (diverse American/Canadian backgrounds)",
+  "Pacific Islander (Hawaiian, Samoan, Tongan, Maori)",
+  "Central Asian (Kazakh, Uzbek, Mongolian)",
+];
+
+let regionIndex = 0;
+
 /**
- * Generate names via Ollama and insert into the pool.
+ * Generate names via Ollama in batches and insert into the pool.
+ * Uses rotating regional diversity prompts.
  * Cross-checks against both sybil_name_pool (UNIQUE) and sybil_bots table.
  * Returns number of names actually inserted.
  */
 export async function refillPool(count = 20): Promise<number> {
   await ensureTable();
 
-  // Pre-load existing sybil_bots handles to avoid generating dupes
+  // Pre-load existing handles to avoid generating dupes
   const { data: existingBots } = await supabase
     .from("sybil_bots")
+    .select("name, handle");
+  const { data: existingPool } = await supabase
+    .from("sybil_name_pool")
     .select("name, handle");
 
   const usedNames = new Set<string>();
   const usedHandles = new Set<string>();
-  if (existingBots) {
-    for (const bot of existingBots) {
-      usedNames.add(bot.name);
-      usedHandles.add(bot.handle);
-    }
+  for (const row of existingBots || []) {
+    usedNames.add(row.name.toLowerCase());
+    usedHandles.add(row.handle.toLowerCase());
+  }
+  for (const row of existingPool || []) {
+    usedNames.add(row.name.toLowerCase());
+    usedHandles.add(row.handle.toLowerCase());
   }
 
   let inserted = 0;
+  const BATCH_SIZE = 10;
+  const batches = Math.ceil(count / BATCH_SIZE);
 
-  for (let i = 0; i < count; i++) {
+  for (let b = 0; b < batches; b++) {
+    const batchCount = Math.min(BATCH_SIZE, count - inserted);
+    const region = REGIONS[regionIndex % REGIONS.length];
+    regionIndex++;
+
     try {
-      const prompt = `Generate a realistic person's social media profile. This should look like a real human being on Twitter.
-Return JSON with exactly two fields:
-- "name": a realistic full name (first + last). Use diverse ethnicities and backgrounds. Examples: Marcus Thompson, Priya Sharma, Emily Rodriguez, James O'Brien, Yuki Tanaka, Aaliyah Jackson, Devon Mitchell, Sofia Reyes
-- "handle": a realistic username based on the name (lowercase, no spaces, no @, 3-15 chars). Should look like something a real person would pick — use parts of their name, maybe add a number. Examples: marcust94, priya_sharma, emrodriguez, jamesobrien7, yukitanaka, aaliyah_j, devmitch, sofiareyes22
+      const prompt = `Generate ${batchCount} realistic social media profiles for people with ${region} backgrounds.
 
-Do NOT use internet slang, memes, or edgy aliases. These should pass as real people.
+Rules:
+- Every name must be a realistic full name (first + last) that a real person from that region would have
+- Every handle must be a realistic username: lowercase, no spaces, no @, 3-15 chars. Mix of name abbreviations, numbers, underscores — like real people pick on Twitter
+- Each name and handle must be UNIQUE — no duplicates within this batch
+- Vary ages, genders, and name styles. Mix traditional and modern names
+- Do NOT use celebrity names, fictional characters, or generic placeholders
 
-Return ONLY the JSON object, nothing else.`;
+Return JSON:
+{"profiles":[{"name":"Full Name","handle":"username"},{"name":"Full Name","handle":"username"},...]}`;
 
-      const result = await ollama.generateJSON<{ name: string; handle: string }>(prompt, 0.9);
+      const result = await ollama.generateJSON<{ profiles: { name: string; handle: string }[] }>(prompt, 0.95);
 
-      // Sanitize handle
-      let handle = (result.handle || "sybil_user")
-        .toLowerCase()
-        .replace(/[^a-z0-9_]/g, "")
-        .slice(0, 15);
-      if (handle.length < 3) handle = `sybil_${Math.floor(Math.random() * 9999)}`;
+      if (!Array.isArray(result.profiles)) continue;
 
-      const name = (result.name || handle).slice(0, 50);
+      for (const profile of result.profiles) {
+        if (!profile.name || !profile.handle) continue;
 
-      // Skip if already exists in sybil_bots or in this batch
-      if (usedNames.has(name) || usedHandles.has(handle)) continue;
+        let handle = profile.handle
+          .toLowerCase()
+          .replace(/[^a-z0-9_]/g, "")
+          .slice(0, 15);
+        if (handle.length < 3) handle = `user_${Math.floor(Math.random() * 99999)}`;
 
-      // Try insert — UNIQUE constraint catches DB dupes in pool table too
-      const { error } = await supabase
-        .from("sybil_name_pool")
-        .insert({ name, handle });
+        const name = profile.name.trim().slice(0, 50);
 
-      if (error) {
-        // Duplicate — skip silently
-        if (error.code === "23505") continue;
-        console.warn(`[NamePool] Insert error: ${error.message}`);
-        continue;
+        if (usedNames.has(name.toLowerCase()) || usedHandles.has(handle)) continue;
+
+        const { error } = await supabase
+          .from("sybil_name_pool")
+          .insert({ name, handle });
+
+        if (error) {
+          if (error.code === "23505") continue;
+          console.warn(`[NamePool] Insert error: ${error.message}`);
+          continue;
+        }
+
+        usedNames.add(name.toLowerCase());
+        usedHandles.add(handle);
+        inserted++;
       }
-
-      usedNames.add(name);
-      usedHandles.add(handle);
-      inserted++;
     } catch (err) {
-      console.warn(`[NamePool] Generation failed for item ${i}:`, err);
+      console.warn(`[NamePool] Batch ${b + 1} generation failed (region: ${region}):`, err);
     }
   }
 
   if (inserted > 0) {
-    console.log(`[NamePool] Refilled pool with ${inserted} names (requested ${count})`);
+    console.log(`[NamePool] Refilled pool with ${inserted} names across ${batches} batches (requested ${count})`);
   }
 
   return inserted;

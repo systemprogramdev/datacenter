@@ -13,6 +13,7 @@ const navLinks = [
   { href: "/jobs", label: "JOBS", icon: "sys-icon-clock" },
   { href: "/logs", label: "LOGS", icon: "sys-icon-file" },
   { href: "/sybil", label: "SYBIL", icon: "sys-icon-users" },
+  { href: "/images", label: "IMAGES", icon: "sys-icon-image" },
   { href: "/settings", label: "SETTINGS", icon: "sys-icon-settings" },
 ];
 
