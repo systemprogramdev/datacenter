@@ -41,14 +41,14 @@ async function safeFetch(url: string): Promise<Response | null> {
 
 // Reddit JSON API (no auth needed for public subreddits)
 const REDDIT_SUBS: Record<string, string[]> = {
-  tech: ["technology", "programming", "artificial"],
-  gaming: ["gaming", "Games", "pcgaming"],
-  music: ["Music", "hiphopheads", "indieheads"],
-  crypto: ["CryptoCurrency", "bitcoin", "ethereum"],
-  science: ["science", "space", "Futurology"],
-  memes: ["nottheonion", "interestingasfuck", "todayilearned"],
-  news: ["worldnews", "news", "UpliftingNews"],
-  culture: ["movies", "television", "books"],
+  tech: ["technology", "programming", "artificial", "MachineLearning", "gadgets", "Android", "apple"],
+  gaming: ["gaming", "Games", "pcgaming", "PS5", "NintendoSwitch", "gamernews", "Steam"],
+  music: ["Music", "hiphopheads", "indieheads", "popheads", "listentothis", "trap"],
+  crypto: ["CryptoCurrency", "bitcoin", "ethereum", "defi", "altcoin"],
+  science: ["science", "space", "Futurology", "EverythingScience", "Physics"],
+  memes: ["nottheonion", "interestingasfuck", "todayilearned", "OutOfTheLoop", "meirl"],
+  news: ["worldnews", "news", "UpliftingNews", "geopolitics", "economics"],
+  culture: ["movies", "television", "books", "anime", "Marvel", "StarWars", "Documentaries"],
 };
 
 async function ingestReddit(category: string, subreddit: string): Promise<RawTrend[]> {
@@ -118,20 +118,54 @@ async function ingestHackerNews(): Promise<RawTrend[]> {
 }
 
 // YouTube trending via RSS (no API key needed)
+const YT = (id: string) => `https://www.youtube.com/feeds/videos.xml?channel_id=${id}`;
 const YOUTUBE_CHANNELS: Record<string, string[]> = {
   tech: [
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UCBJycsmduvYEL83R_U4JriQ", // MKBHD
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UCXuqSBlHAE6Xw-yeJA0Tunw", // Linus
+    YT("UCBJycsmduvYEL83R_U4JriQ"), // MKBHD
+    YT("UCXuqSBlHAE6Xw-yeJA0Tunw"), // Linus Tech Tips
+    YT("UCey_c7U86mJGz1VJWH5CYPA"), // Fireship
+    YT("UCsBjURrPoezykLs9EqgamOA"), // Fireship (alt)
+    YT("UCVHFbqXqoYvEWM1Ddxl0QDg"), // Android Authority
+    YT("UC0vBXGSyV14uvJ4hECDOl0Q"), // Tech Linked
   ],
   gaming: [
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UCam8T03EOFBsNdR0thrFHdQ", // videogamedunkey
+    YT("UCam8T03EOFBsNdR0thrFHdQ"), // videogamedunkey
+    YT("UCNvzD7Z-g64bPXxGzaQaa4g"), // penguinz0/Cr1TiKaL
+    YT("UCWX2lBtEbDaOsfgnqJNDnog"), // TheRadBrad
+    YT("UCWqr2tH3dPshNhPjV5h1xRw"), // jacksepticeye
+    YT("UC-lHJZR3Gqxm24_Vd_AJ5Yw"), // PewDiePie
   ],
   science: [
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UCsXVk37bltHxD1rDPwtNM8Q", // Kurzgesagt
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UCUHW94eEFW7hkUMVaZz4eDg", // Veritasium
+    YT("UCsXVk37bltHxD1rDPwtNM8Q"), // Kurzgesagt
+    YT("UCUHW94eEFW7hkUMVaZz4eDg"), // Veritasium
+    YT("UC6nSFpj9HTCZ5t-N3Rm3-HA"), // Vsauce
+    YT("UCZYTClx2T1of7BRZ86-8fow"), // SciShow
+    YT("UCHnyfMqiRRG1u-2MsSQLbXA"), // 3Blue1Brown
   ],
   music: [
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UC-9-kyTW8ZkZNDHQJ6FgpwQ", // Music
+    YT("UC-9-kyTW8ZkZNDHQJ6FgpwQ"), // Music (YouTube)
+    YT("UCF8e4K03CsEMtP3O4MNq-dQ"), // Genius
+    YT("UCcgqSM4YEo5vVQpqwN-MaNg"), // Fantano / theneedledrop
+    YT("UCWGkXhrR2JhgiQMbwJiUkKg"), // Complex Music
+  ],
+  culture: [
+    YT("UCHDxYLv8iovIbhrfl16ahyQ"), // Philip DeFranco
+    YT("UCX6b17PVsYBQ0ip5gyeme-Q"), // CrashCourse
+    YT("UCLXo7UDZvByw2ixzpQCufnA"), // Vox
+    YT("UCsT0YIqwnpJCM-mx7-gSA4Q"), // TEDx Talks
+  ],
+  news: [
+    YT("UCupvZG-5ko_eiXAupbDfxWw"), // CNN
+    YT("UCeY0bbntWzzVIaj2z3QigXg"), // NBC News
+    YT("UC16niRr50-MSBwiO3YDb3RA"), // BBC News
+  ],
+  crypto: [
+    YT("UCqK_GSMbpiV8spgD3ZGloSw"), // Coin Bureau
+    YT("UCRvqjQPSeaWn-uEx-w0XOIg"), // Crypto Banter
+  ],
+  memes: [
+    YT("UCpnkp_D4FLPCiXOmDhoAeYA"), // Daily Dose Of Internet
+    YT("UCPDXXXJj9nax0fr0Wfc048g"), // Collab DRM
   ],
 };
 
@@ -174,9 +208,18 @@ async function ingestYouTube(category: string, feedUrl: string): Promise<RawTren
   }
 }
 
-// Google Trends daily RSS
+// Google Trends daily RSS (multiple geo feeds for better coverage)
 async function ingestGoogleTrends(): Promise<RawTrend[]> {
-  const res = await safeFetch("https://trends.google.com/trending/rss?geo=US");
+  // Try multiple endpoints — Google changes these frequently
+  const urls = [
+    "https://trends.google.com/trending/rss?geo=US",
+    "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US",
+  ];
+  let res: Response | null = null;
+  for (const url of urls) {
+    res = await safeFetch(url);
+    if (res?.ok) break;
+  }
   if (!res || !res.ok) return [];
 
   try {
@@ -302,20 +345,24 @@ export async function ingestAll(): Promise<{ ingested: number; errors: number }>
     allTrends.push(...(await ingestGoogleTrends()));
   } catch { errors++; }
 
-  // Reddit — pick one sub per category to avoid rate limits
+  // Reddit — pick 2 subs per category for better coverage
   for (const [category, subs] of Object.entries(REDDIT_SUBS)) {
-    try {
-      const sub = subs[Math.floor(Math.random() * subs.length)];
-      allTrends.push(...(await ingestReddit(category, sub)));
-    } catch { errors++; }
+    const shuffled = [...subs].sort(() => Math.random() - 0.5);
+    for (const sub of shuffled.slice(0, 2)) {
+      try {
+        allTrends.push(...(await ingestReddit(category, sub)));
+      } catch { errors++; }
+    }
   }
 
-  // YouTube — pick one channel per category
+  // YouTube — pick 2 channels per category
   for (const [category, feeds] of Object.entries(YOUTUBE_CHANNELS)) {
-    try {
-      const feed = feeds[Math.floor(Math.random() * feeds.length)];
-      allTrends.push(...(await ingestYouTube(category, feed)));
-    } catch { errors++; }
+    const shuffled = [...feeds].sort(() => Math.random() - 0.5);
+    for (const feed of shuffled.slice(0, 2)) {
+      try {
+        allTrends.push(...(await ingestYouTube(category, feed)));
+      } catch { errors++; }
+    }
   }
 
   // RSS — pick one feed per category

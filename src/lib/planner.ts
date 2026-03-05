@@ -8,7 +8,8 @@ import { getTrendingForBot, describeTrendingItem } from "./trends";
 import { recallMemories, buildRecallContext, extractMemories, formatMemoriesForPrompt } from "./memory";
 import type { BotWithConfig, BotStatus, FeedItem, PlannedAction, MarketData, BankingProfile } from "./types";
 
-const NEWS_POST_CHANCE = 0.3; // 30% chance a post includes a news link
+const LINK_POST_CHANCE = 0.55;   // 55% chance a post includes a trending link
+const TOPIC_POST_CHANCE = 0.25;  // 25% chance a post is about a trending topic (no link)
 const MAX_CONTENT_LEN = 540;
 
 // --- Banking Profiles ---
@@ -534,17 +535,33 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     (decision.action === "post" || decision.action === "reply") &&
     !decision.params.content
   ) {
-    // Maybe attach a trending article/link to posts
-    let newsArticle: { title: string; link: string } | undefined;
-    if (decision.action === "post" && Math.random() < NEWS_POST_CHANCE) {
-      // Try trending system first, fall back to legacy RSS
-      const trending = await getTrendingForBot(bot, 1);
-      if (trending.length > 0) {
-        newsArticle = { title: trending[0].title, link: trending[0].url };
-      } else {
-        const article = await getNewsForBot(bot);
-        if (article) newsArticle = article;
+    // Decide content strategy for posts: link share, topic reaction, or freeform
+    let newsArticle: { title: string; link: string; source?: string } | undefined;
+    let topicHint: string | undefined;
+
+    if (decision.action === "post") {
+      const roll = Math.random();
+      if (roll < LINK_POST_CHANCE) {
+        // Share a trending link
+        const trending = await getTrendingForBot(bot, 1);
+        if (trending.length > 0) {
+          newsArticle = {
+            title: trending[0].title,
+            link: trending[0].url,
+            source: trending[0].source,
+          };
+        } else {
+          const article = await getNewsForBot(bot);
+          if (article) newsArticle = { title: article.title, link: article.link, source: "rss" };
+        }
+      } else if (roll < LINK_POST_CHANCE + TOPIC_POST_CHANCE) {
+        // React to a trending topic without sharing a link
+        const trending = await getTrendingForBot(bot, 1);
+        if (trending.length > 0) {
+          topicHint = `Trending right now: "${trending[0].title}" (${describeTrendingItem(trending[0])}) — share your thoughts on this`;
+        }
       }
+      // else: freeform post (20% of the time)
     }
 
     const contentPrompt = buildContentPrompt(bot, decision.action, {
@@ -552,14 +569,16 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
         decision.action === "reply"
           ? feed.find((f) => f.id === decision.params.spit_id)?.content
           : undefined,
-      newsArticle,
+      newsArticle: newsArticle ? { title: newsArticle.title, link: newsArticle.link } : undefined,
+      trendSource: newsArticle?.source,
+      topic: topicHint,
       memoriesBlock,
     });
 
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
 
-    // Append the link and ensure total content fits under 480 chars (plenty of buffer for 560 limit)
+    // Append the link and ensure total content fits
     if (newsArticle) {
       const maxCommentLen = 540 - newsArticle.link.length - 1;
       if (content.length > maxCommentLen) {
@@ -696,19 +715,32 @@ export async function planSpecificAction(
 
   // For content actions, generate via Ollama
   if (actionType === "post") {
-    // Maybe attach a trending article/link
-    let newsArticle: { title: string; link: string } | undefined;
-    if (Math.random() < NEWS_POST_CHANCE) {
+    // Decide: link share, topic reaction, or freeform
+    let newsArticle: { title: string; link: string; source?: string } | undefined;
+    let topicHint: string | undefined;
+
+    const roll = Math.random();
+    if (roll < LINK_POST_CHANCE) {
       const trending = await getTrendingForBot(bot, 1);
       if (trending.length > 0) {
-        newsArticle = { title: trending[0].title, link: trending[0].url };
+        newsArticle = { title: trending[0].title, link: trending[0].url, source: trending[0].source };
       } else {
         const article = await getNewsForBot(bot);
-        if (article) newsArticle = article;
+        if (article) newsArticle = { title: article.title, link: article.link, source: "rss" };
+      }
+    } else if (roll < LINK_POST_CHANCE + TOPIC_POST_CHANCE) {
+      const trending = await getTrendingForBot(bot, 1);
+      if (trending.length > 0) {
+        topicHint = `Trending right now: "${trending[0].title}" (${describeTrendingItem(trending[0])}) — share your thoughts on this`;
       }
     }
 
-    const contentPrompt = buildContentPrompt(bot, "post", { newsArticle, memoriesBlock });
+    const contentPrompt = buildContentPrompt(bot, "post", {
+      newsArticle: newsArticle ? { title: newsArticle.title, link: newsArticle.link } : undefined,
+      trendSource: newsArticle?.source,
+      topic: topicHint,
+      memoriesBlock,
+    });
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
 
@@ -718,7 +750,9 @@ export async function planSpecificAction(
         content = trimContent(content, maxCommentLen);
       }
       content = `${content} ${newsArticle.link}`;
-      console.log(`[Planner] ${bot.name} posting news: ${newsArticle.title}`);
+      console.log(`[Planner] ${bot.name} posting trending [${newsArticle.source}]: ${newsArticle.title}`);
+    } else if (topicHint) {
+      console.log(`[Planner] ${bot.name} reacting to trend: ${topicHint.slice(0, 80)}`);
     }
 
     if (content.length > 540) {
@@ -728,7 +762,7 @@ export async function planSpecificAction(
     return {
       action: "post",
       params: { content },
-      reasoning: newsArticle ? `Sharing article: ${newsArticle.title}` : "Manual trigger",
+      reasoning: newsArticle ? `Sharing [${newsArticle.source}]: ${newsArticle.title}` : topicHint ? "Reacting to trending topic" : "Freeform post",
     };
   }
 

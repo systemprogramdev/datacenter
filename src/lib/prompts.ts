@@ -126,7 +126,7 @@ STRATEGY RULES:
 export function buildContentPrompt(
   bot: BotWithConfig,
   type: "post" | "reply" | "dm_send" | "dm_reply",
-  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string }; dmHistory?: string; memoriesBlock?: string }
+  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string }; trendSource?: string; dmHistory?: string; memoriesBlock?: string }
 ): string {
   const tones: Record<string, string> = {
     aggressive: "confrontational, edgy, and provocative",
@@ -194,14 +194,22 @@ Just output the reply text, nothing else.`;
       ? "React in just a few words (under 50 chars)."
       : "Write a short comment (under 150 chars).";
 
+    // Source-specific framing so bots sound natural
+    const sourceFrame =
+      context.trendSource === "youtube" ? "You found this YouTube video and want to share it" :
+      context.trendSource === "reddit" ? "You saw this on Reddit and want to share it" :
+      context.trendSource === "hackernews" ? "You saw this on Hacker News and want to share it" :
+      context.trendSource === "google_trends" ? "This is trending right now and you want to talk about it" :
+      "You found this and want to share it";
+
     return `You are ${bot.name} (@${bot.handle}) on SPITr, a social combat game. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
 ${context?.memoriesBlock || ""}
 
-You found this article and want to share it:
+${sourceFrame}:
 "${context.newsArticle.title}"
 
-${newsLengthHint} Sound like YOU would say it. Be ${tone}. ${rules}
+${newsLengthHint} Sound like YOU would say it. Be ${tone}. Be opinionated — agree, disagree, joke about it, or hype it up. ${rules}
 IMPORTANT: Just output your comment text, nothing else. Do NOT include the link - it will be appended automatically. Do not wrap in quotes.`;
   }
 
