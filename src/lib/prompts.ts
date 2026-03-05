@@ -138,7 +138,7 @@ export function buildContentPrompt(
   };
 
   const tone = tones[bot.personality] || tones.neutral;
-  const rules = "NEVER use hashtags. SPITr does not have hashtags.";
+  const rules = "NEVER use hashtags. SPITr does not have hashtags. NEVER tag @someone or @Someone or any made-up handles — only tag real users whose handles you can see in the feed or context above. If you don't know someone's handle, don't @ anyone.";
 
   // Randomize target length to feel more human
   // Sometimes short and punchy, sometimes longer
