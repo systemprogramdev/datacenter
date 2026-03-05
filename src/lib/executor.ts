@@ -2,6 +2,7 @@ import { supabase } from "./supabase";
 import { spitrApi } from "./spitr-api";
 import type { BotJob, ActionType, PlannedAction } from "./types";
 import { emitEvent } from "./scheduler";
+import { extractMemoriesFromJob } from "./planner";
 
 export async function executeJob(job: BotJob, botUserId: string): Promise<void> {
   // Mark job as running
@@ -40,6 +41,13 @@ export async function executeJob(job: BotJob, botUserId: string): Promise<void> 
     if (job.action_type === "consolidate" && result) {
       await notifyConsolidation(job.bot_id, botUserId, result as Record<string, unknown>);
     }
+
+    // Extract memories from the completed action (async, don't block)
+    extractMemoriesFromJob(
+      job.bot_id,
+      { action: job.action_type, params: job.action_payload } as PlannedAction,
+      result as Record<string, unknown> | null
+    ).catch((err) => console.error("[Executor] Memory extraction error:", err));
 
     emitEvent("job:completed", {
       jobId: job.id,

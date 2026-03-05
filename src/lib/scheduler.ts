@@ -3,6 +3,8 @@ import { supabase } from "./supabase";
 import { planAction, planSpecificAction } from "./planner";
 import { executeJob } from "./executor";
 import { sybilScheduler } from "./sybil-scheduler";
+import { ingestAll as ingestTrends } from "./trends";
+import { decayMemories } from "./memory";
 import type {
   BotWithConfig,
   BotJob,
@@ -83,6 +85,8 @@ const MAX_BATCH_PER_BOT = parseInt(process.env.SCHEDULER_MAX_BATCH || "1", 10);
 
 class Scheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private lastTrendIngest = 0;
+  private lastMemoryDecay = 0;
   private state: SchedulerState = {
     running: false,
     paused: false,
@@ -151,6 +155,12 @@ class Scheduler {
       // 0. Clear stale pending jobs (scheduled >2h in the future = zombie from old scheduler)
       await this.clearStaleJobs();
 
+      // 0.5. Ingest trending content every 3 hours
+      await this.maybeIngestTrends();
+
+      // 0.6. Decay old memories once per day
+      await this.maybeDecayMemories();
+
       // 1. Process any existing pending jobs first
       await this.processPendingJobs();
 
@@ -159,6 +169,40 @@ class Scheduler {
     } catch (error) {
       console.error("[Scheduler] Tick error:", error);
       this.state.errors++;
+    }
+  }
+
+  private async maybeIngestTrends() {
+    const THREE_HOURS = 3 * 60 * 60 * 1000;
+    if (Date.now() - this.lastTrendIngest < THREE_HOURS) return;
+    this.lastTrendIngest = Date.now();
+    try {
+      const result = await ingestTrends();
+      console.log(`[Scheduler] Trend ingestion: ${result.ingested} items, ${result.errors} errors`);
+    } catch (err) {
+      console.error("[Scheduler] Trend ingestion failed:", err);
+    }
+  }
+
+  private async maybeDecayMemories() {
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    if (Date.now() - this.lastMemoryDecay < ONE_DAY) return;
+    this.lastMemoryDecay = Date.now();
+    try {
+      const { data: bots } = await supabase
+        .from("bots")
+        .select("id")
+        .eq("is_active", true);
+      if (!bots) return;
+      let totalDecayed = 0;
+      for (const bot of bots) {
+        totalDecayed += await decayMemories(bot.id);
+      }
+      if (totalDecayed > 0) {
+        console.log(`[Scheduler] Memory decay: ${totalDecayed} memories decayed across ${bots.length} bots`);
+      }
+    } catch (err) {
+      console.error("[Scheduler] Memory decay failed:", err);
     }
   }
 

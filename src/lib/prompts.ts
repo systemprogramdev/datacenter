@@ -5,7 +5,8 @@ export function buildActionDecisionPrompt(
   status: BotStatus,
   feed: FeedItem[],
   targets?: { id: string; handle: string; hp: number; max_hp?: number; level?: number }[],
-  market?: MarketData
+  market?: MarketData,
+  memoriesBlock?: string
 ): string {
   const config = bot.config;
   const enabledActions = config?.enabled_actions.join(", ") || "post, reply, like";
@@ -29,6 +30,7 @@ export function buildActionDecisionPrompt(
   return `You are ${bot.name} (@${bot.handle}), a user on SPITr (a social combat game).
 Personality: ${bot.personality}
 ${config?.custom_prompt ? `Special instructions: ${config.custom_prompt}` : ""}
+${memoriesBlock || ""}
 
 Current state:
 - HP: ${status.hp}/${status.max_hp}${status.destroyed ? " ⚠️ DESTROYED" : ""}
@@ -124,7 +126,7 @@ STRATEGY RULES:
 export function buildContentPrompt(
   bot: BotWithConfig,
   type: "post" | "reply" | "dm_send" | "dm_reply",
-  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string }; dmHistory?: string }
+  context?: { replyTo?: string; topic?: string; newsArticle?: { title: string; link: string }; dmHistory?: string; memoriesBlock?: string }
 ): string {
   const tones: Record<string, string> = {
     aggressive: "confrontational, edgy, and provocative",
@@ -150,6 +152,7 @@ export function buildContentPrompt(
   if (type === "dm_send") {
     return `You are ${bot.name} (@${bot.handle}) on SPITr. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+${context?.memoriesBlock || ""}
 
 Write a direct message${context?.replyTo ? ` (context: ${context.replyTo})` : ""}.
 
@@ -160,6 +163,7 @@ Just output the DM text, nothing else. Do not wrap in quotes.`;
   if (type === "dm_reply") {
     return `You are ${bot.name} (@${bot.handle}) on SPITr. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+${context?.memoriesBlock || ""}
 
 You have an unread DM conversation. Here is the recent chat history:
 ${context?.dmHistory || "(no history)"}
@@ -176,6 +180,7 @@ Just output your reply text, nothing else. Do not wrap in quotes.`;
 
     return `You are ${bot.name} (@${bot.handle}) on SPITr. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+${context?.memoriesBlock || ""}
 
 Write a reply to this spit:
 "${context.replyTo}"
@@ -191,6 +196,7 @@ Just output the reply text, nothing else.`;
 
     return `You are ${bot.name} (@${bot.handle}) on SPITr, a social combat game. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+${context?.memoriesBlock || ""}
 
 You found this article and want to share it:
 "${context.newsArticle.title}"
@@ -201,6 +207,7 @@ IMPORTANT: Just output your comment text, nothing else. Do NOT include the link 
 
   return `You are ${bot.name} (@${bot.handle}) on SPITr, a social combat game. Your personality is ${bot.personality}.
 ${bot.config?.custom_prompt ? `Special instructions: ${bot.config.custom_prompt}` : ""}
+${context?.memoriesBlock || ""}
 ${context?.topic ? `Topic hint: ${context.topic}` : ""}
 
 ${lengthHint} Be ${tone}. ${rules}

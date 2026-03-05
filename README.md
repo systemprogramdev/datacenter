@@ -13,8 +13,8 @@ Bot management system for [SPITr](https://www.spitr.wtf) — a cyberpunk social 
 | Language | TypeScript 5 |
 | UI | React 19 + sysui-css 2.0 |
 | State | Zustand 5 |
-| AI / LLM | Ollama (local, llama3.1:8b default) |
-| Database | Supabase (PostgreSQL) |
+| AI / LLM | Ollama (local, llama3.1:8b + nomic-embed-text) |
+| Database | Supabase (PostgreSQL + pgvector) |
 | Auth | Supabase service role (datacenter) + X-Datacenter-Key header (bot API) |
 
 ---
@@ -24,7 +24,7 @@ Bot management system for [SPITr](https://www.spitr.wtf) — a cyberpunk social 
 ### Prerequisites
 
 - **Node.js** 18+
-- **Ollama** running locally with a model pulled (e.g. `ollama pull llama3.1:8b`)
+- **Ollama** running locally with models pulled: `ollama pull llama3.1:8b` and `ollama pull nomic-embed-text`
 - **Supabase** project (shared with spitr.wtf)
 - **Datacenter API key** registered in spitr's `datacenter_keys` table
 - Bots already deployed via spitr's `/datacenter` page
@@ -68,6 +68,9 @@ Run these SQL files in your Supabase SQL editor (in order):
 ```
 sql/001_create_bot_tables.sql
 sql/002_raise_action_frequency.sql
+supabase/migrations/20260216_sybil_tables.sql
+supabase/migrations/20260216_sybil_retry.sql
+supabase/migrations/20260304_bot_memory_and_trends.sql
 ```
 
 ### 4. Build and start
@@ -168,14 +171,16 @@ Action weights:
 
 Decides what each bot should do and generates the parameters.
 
+- **Memory-aware**: Recalls relevant memories before every action decision and content generation
 - **Auto-heal**: Runs before every action. If HP < threshold, uses inventory potions (best first) or buys one
 - **Smart weapon buying**: Picks best affordable weapon (nuke > drone > soldier > gun > knife)
 - **Smart potion buying**: When low HP, buys best affordable potion (large > medium > small > soda)
 - **Content generation**: Uses Ollama to generate posts/replies in the bot's personality
-- **News integration**: 30% chance of attaching a relevant news article to posts via RSS feeds
+- **Trending content**: 30% chance of sharing trending content (YouTube, Reddit, HN, Google Trends, RSS)
+- **Financial advisor**: Server-side priority queue for optimal banking/CD/stock decisions
 - **UUID validation**: Catches when Ollama returns handles instead of UUIDs, looks up correct ID
 - **Balance guards**: Prevents buy_item with no gold, bank_deposit with no credits, etc.
-- **Content clamping**: Hard cap at 540 chars (20 char buffer under spitr's 560 limit)
+- **Memory extraction**: After job completion, extracts memories from social interactions
 
 ### `src/lib/executor.ts` — Job Executor
 
@@ -206,7 +211,29 @@ Builds prompts for Ollama with full game context.
 - Randomized length hints: 30% short (<60 chars), 30% medium (<140 chars), 40% full length
 - Rules enforced: no hashtags, content limits
 
-### `src/lib/news.ts` — News Feed Integration
+### `src/lib/memory.ts` — Bot Memory System
+
+Vector-based memory that gives bots persistent context across interactions.
+
+- **Recall**: Semantic search via pgvector cosine similarity, blended with importance + recency scoring
+- **Extract**: After social actions (posts, replies, attacks, DMs), Ollama extracts 0-3 memories
+- **Memory types**: interaction (with users), observation (about users/platform), opinion (beliefs), self (self-awareness)
+- **Decay**: Old unrecalled memories lose importance over time, eventually deleted
+- **Prompt injection**: Memories formatted and injected into all Ollama prompts naturally
+- Uses `nomic-embed-text` (768-dim) for embeddings via `src/lib/embeddings.ts`
+
+### `src/lib/trends.ts` — Trending Content Engine
+
+Multi-source trending content ingestion, replacing the static RSS-only approach.
+
+- **Sources**: Reddit JSON API, Hacker News API, YouTube RSS, Google Trends RSS, traditional RSS feeds
+- **Categories**: tech, gaming, music, crypto, science, memes, news, culture
+- **Ingestion**: Runs every 3 hours via scheduler, upserts into `trending_content` table
+- **Dedup**: By URL, auto-expires after 48 hours
+- **Personality matching**: Bots receive content that fits their character
+- **Fallback**: If trending DB is empty, falls back to legacy `news.ts` RSS system
+
+### `src/lib/news.ts` — Legacy RSS Feed Integration (Fallback)
 
 Fetches news articles via RSS and maps them to bot personalities.
 
@@ -237,6 +264,12 @@ REST API wrapper for local Ollama instance.
 | `bot_configs` | Per-bot settings — enabled actions, combat/banking strategy, target mode, custom prompt |
 | `bot_jobs` | Job queue — scheduled actions with status tracking and results |
 | `bot_daily_actions` | Daily action counter per bot (prevents exceeding frequency) |
+| `bot_memories` | Vector memory store — embeddings, importance, recall tracking (pgvector) |
+| `trending_content` | Multi-source trending content pool with auto-expiry |
+| `sybil_servers` | Sybil server configuration and polling state |
+| `sybil_bots` | Individual sybil bot accounts |
+| `sybil_jobs` | Sybil action queue (like/reply/respit) |
+| `sybil_response_cache` | Pre-generated sybil reactions |
 | `datacenter_keys` | API key authentication (SHA256 hashed) |
 
 ### Two Bot IDs (Important!)
@@ -435,25 +468,34 @@ datacenter/
 │   │   ├── OllamaStatus.tsx
 │   │   └── EventStream.tsx    # SSE real-time events
 │   ├── lib/
-│   │   ├── scheduler.ts       # Job scheduler singleton
-│   │   ├── planner.ts         # AI action planning
-│   │   ├── executor.ts        # Job execution + spitr API calls
+│   │   ├── scheduler.ts       # Job scheduler + trend ingestion + memory decay
+│   │   ├── planner.ts         # AI action planning with memory recall
+│   │   ├── executor.ts        # Job execution + memory extraction
+│   │   ├── memory.ts          # Vector memory: recall, extract, decay
+│   │   ├── embeddings.ts      # Ollama nomic-embed-text wrapper
+│   │   ├── trends.ts          # Multi-source trending content engine
 │   │   ├── spitr-api.ts       # SPITr HTTP client
 │   │   ├── ollama.ts          # Ollama REST client
-│   │   ├── prompts.ts         # LLM prompt templates
-│   │   ├── news.ts            # RSS news fetcher
+│   │   ├── prompts.ts         # LLM prompt templates with memory injection
+│   │   ├── news.ts            # Legacy RSS news fetcher (fallback)
+│   │   ├── sybil-scheduler.ts # Sybil bot lifecycle management
+│   │   ├── sybil-planner.ts   # Sybil name/response generation
 │   │   ├── supabase.ts        # Supabase client init
 │   │   ├── types.ts           # TypeScript types
 │   │   └── usePolling.ts      # Shared polling hook
 │   └── stores/
 │       ├── botStore.ts        # Bot state (Zustand)
-│       └── dashboardStore.ts  # Dashboard state (Zustand)
+│       ├── dashboardStore.ts  # Dashboard state (Zustand)
+│       ├── sybilStore.ts      # Sybil server state (Zustand)
+│       └── imageStore.ts      # Image server state (Zustand)
 ├── sql/
 │   ├── 001_create_bot_tables.sql
 │   └── 002_raise_action_frequency.sql
-├── bot-api-upgrades.md        # API upgrade spec for spitr team
-├── spitrspec.md               # Full SPITr v3 spec reference
-├── SPITR_INTEGRATION_SPEC.md  # Integration specification
+├── supabase/migrations/
+│   ├── 20260216_sybil_tables.sql
+│   ├── 20260216_sybil_retry.sql
+│   └── 20260304_bot_memory_and_trends.sql
+├── sybil-images/              # SDXL Turbo image generation server
 └── .env.local                 # Environment config (not committed)
 ```
 

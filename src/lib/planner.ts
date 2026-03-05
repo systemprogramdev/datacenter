@@ -4,6 +4,8 @@ import { spitrApi } from "./spitr-api";
 import { buildActionDecisionPrompt, buildContentPrompt } from "./prompts";
 import type { DMConversation } from "./types";
 import { getNewsForBot } from "./news";
+import { getTrendingForBot, describeTrendingItem } from "./trends";
+import { recallMemories, buildRecallContext, extractMemories, formatMemoriesForPrompt } from "./memory";
 import type { BotWithConfig, BotStatus, FeedItem, PlannedAction, MarketData, BankingProfile } from "./types";
 
 const NEWS_POST_CHANCE = 0.3; // 30% chance a post includes a news link
@@ -493,8 +495,13 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0, max_hp: f.max_hp || 5000, level: f.level || 1 }))
     .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
 
+  // Recall relevant memories for context
+  const recallCtx = buildRecallContext(bot, feed, targets);
+  const memories = await recallMemories(bot.id, recallCtx);
+  const memoriesBlock = formatMemoriesForPrompt(memories);
+
   // Build prompt and ask Ollama for an action decision
-  const prompt = buildActionDecisionPrompt(bot, status, feed, targets, market);
+  const prompt = buildActionDecisionPrompt(bot, status, feed, targets, market, memoriesBlock);
 
   const decision = await ollama.generateJSON<PlannedAction>(prompt);
 
@@ -527,11 +534,17 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
     (decision.action === "post" || decision.action === "reply") &&
     !decision.params.content
   ) {
-    // Maybe attach a news article to posts
+    // Maybe attach a trending article/link to posts
     let newsArticle: { title: string; link: string } | undefined;
     if (decision.action === "post" && Math.random() < NEWS_POST_CHANCE) {
-      const article = await getNewsForBot(bot);
-      if (article) newsArticle = article;
+      // Try trending system first, fall back to legacy RSS
+      const trending = await getTrendingForBot(bot, 1);
+      if (trending.length > 0) {
+        newsArticle = { title: trending[0].title, link: trending[0].url };
+      } else {
+        const article = await getNewsForBot(bot);
+        if (article) newsArticle = article;
+      }
     }
 
     const contentPrompt = buildContentPrompt(bot, decision.action, {
@@ -540,6 +553,7 @@ export async function planAction(bot: BotWithConfig): Promise<PlannedAction> {
           ? feed.find((f) => f.id === decision.params.spit_id)?.content
           : undefined,
       newsArticle,
+      memoriesBlock,
     });
 
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
@@ -671,16 +685,30 @@ export async function planSpecificAction(
   const dmReply = await checkUnreadDMs(bot);
   if (dmReply) return dmReply;
 
+  // Recall memories for content generation
+  const targets = feed
+    .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
+    .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0 }))
+    .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
+  const recallCtx = buildRecallContext(bot, feed, targets);
+  const memories = await recallMemories(bot.id, recallCtx);
+  const memoriesBlock = formatMemoriesForPrompt(memories);
+
   // For content actions, generate via Ollama
   if (actionType === "post") {
-    // Maybe attach a news article
+    // Maybe attach a trending article/link
     let newsArticle: { title: string; link: string } | undefined;
     if (Math.random() < NEWS_POST_CHANCE) {
-      const article = await getNewsForBot(bot);
-      if (article) newsArticle = article;
+      const trending = await getTrendingForBot(bot, 1);
+      if (trending.length > 0) {
+        newsArticle = { title: trending[0].title, link: trending[0].url };
+      } else {
+        const article = await getNewsForBot(bot);
+        if (article) newsArticle = article;
+      }
     }
 
-    const contentPrompt = buildContentPrompt(bot, "post", { newsArticle });
+    const contentPrompt = buildContentPrompt(bot, "post", { newsArticle, memoriesBlock });
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
 
@@ -708,6 +736,7 @@ export async function planSpecificAction(
     const target = feed[Math.floor(Math.random() * feed.length)];
     const contentPrompt = buildContentPrompt(bot, "reply", {
       replyTo: target.content,
+      memoriesBlock,
     });
     let content = await ollama.generate(contentPrompt, { temperature: 0.8 });
     content = content.trim().replace(/^["']|["']$/g, "");
@@ -1214,10 +1243,44 @@ export async function planSpecificAction(
   }
 
   // Final fallback: use Ollama to decide (should rarely reach here)
-  const targets = feed
+  const fallbackTargets = feed
     .filter((f) => f.user_id !== bot.user_id && !f.destroyed)
     .map((f) => ({ id: f.user_id, handle: f.handle, hp: f.hp || 0, max_hp: f.max_hp || 5000, level: f.level || 1 }))
     .filter((t, i, arr) => arr.findIndex((a) => a.id === t.id) === i);
-  const prompt = buildActionDecisionPrompt(bot, status, feed, targets);
+  const prompt = buildActionDecisionPrompt(bot, status, feed, fallbackTargets, undefined, memoriesBlock);
   return ollama.generateJSON<PlannedAction>(prompt);
+}
+
+/** Extract memories from a completed job. Called by executor after success. */
+export async function extractMemoriesFromJob(
+  botId: string,
+  action: PlannedAction,
+  result: Record<string, unknown> | null,
+  feed?: FeedItem[]
+): Promise<void> {
+  try {
+    const { data: bot } = await supabase
+      .from("bots")
+      .select("*, config:bot_configs(*)")
+      .eq("id", botId)
+      .single();
+    if (!bot) return;
+
+    const botWithConfig: BotWithConfig = {
+      ...bot,
+      config: Array.isArray(bot.config) ? bot.config[0] || null : bot.config,
+    };
+
+    // Resolve target handle if we have one
+    let targetHandle: string | undefined;
+    const targetId = action.params.target_id || action.params.target_user_id;
+    if (targetId && feed) {
+      const match = feed.find((f) => f.user_id === targetId);
+      if (match) targetHandle = match.handle;
+    }
+
+    await extractMemories(botWithConfig, action, result, { feed, targetHandle });
+  } catch (err) {
+    console.error("[Planner] Memory extraction failed:", err);
+  }
 }
